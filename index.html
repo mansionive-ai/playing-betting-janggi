@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>플레잉배팅장기</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>♟ 플레잉배팅장기</h1>
+</header>
+
+<!-- 로비 화면 -->
+<section id="screen-lobby" class="screen">
+  <div class="panel">
+    <label>내 이름</label>
+    <input type="text" id="input-name" placeholder="닉네임 입력">
+
+    <div class="divider"></div>
+
+    <h3>방 만들기 (선 플레이어)</h3>
+    <label>시작 칩 개수</label>
+    <input type="number" id="input-chips" value="30" min="5" max="200">
+    <button id="btn-create-room">방 만들기</button>
+
+    <div class="divider"></div>
+
+    <h3>방 입장하기 (후 플레이어)</h3>
+    <label>방 코드</label>
+    <input type="text" id="input-join-code" placeholder="예: AB12C" maxlength="5" style="text-transform:uppercase">
+    <button id="btn-join-room">입장하기</button>
+  </div>
+</section>
+
+<!-- 대기 화면 -->
+<section id="screen-waiting" class="screen" style="display:none">
+  <div class="panel center">
+    <p>방이 생성되었습니다. 아래 코드를 상대에게 전달하세요.</p>
+    <div class="room-code" id="room-code-display">-----</div>
+    <button id="btn-copy-code">코드 복사</button>
+    <p class="muted">상대가 입장하면 자동으로 배치 단계로 넘어갑니다...</p>
+  </div>
+</section>
+
+<!-- 배치 화면 -->
+<section id="screen-placement" class="screen" style="display:none">
+  <div class="panel center">
+    <p id="placement-status" class="status-text"></p>
+    <div id="placement-palette" class="palette"></div>
+    <div id="placement-board" class="board"></div>
+    <button id="btn-confirm-placement" disabled>배치 확정</button>
+  </div>
+</section>
+
+<!-- 전투 화면 -->
+<section id="screen-battle" class="screen" style="display:none">
+  <div class="battle-layout">
+    <div class="side-info">
+      <div class="chip-box">상대 칩: <span id="chip-opp">-</span></div>
+      <div id="turn-indicator" class="turn-indicator"></div>
+      <div class="timer-box">⏱ <span id="timer-display">3:00</span></div>
+      <div class="chip-box">내 칩: <span id="chip-mine">-</span></div>
+
+      <div id="duel-box" class="duel-box" style="display:none">
+        <h3 id="duel-title">결투!</h3>
+        <p>팟: <span id="duel-pot">0</span>칩</p>
+        <p>내 베팅: <span id="duel-my-contrib">0</span> / 상대 베팅: <span id="duel-opp-contrib">0</span></p>
+        <div id="duel-actions"></div>
+      </div>
+    </div>
+    <div id="battle-board" class="board battle"></div>
+  </div>
+</section>
+
+<!-- 결과 화면 -->
+<section id="screen-result" class="screen" style="display:none">
+  <div class="panel center">
+    <h2 id="result-title"></h2>
+    <p id="result-reason"></p>
+    <button id="btn-back-lobby">로비로 돌아가기</button>
+  </div>
+</section>
+
+<!-- Firebase SDK (compat 버전 - 별도 빌드 도구 없이 GitHub Pages에서 바로 사용 가능) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+
+<script src="firebase-config.js"></script>
+<script src="rules.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

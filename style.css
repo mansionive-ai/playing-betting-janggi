@@ -1,0 +1,120 @@
+:root {
+  --wood: #e0b878;
+  --wood-dark: #c9924a;
+  --gold: #d4a437;
+  --ink: #2a1c10;
+  --panel-bg: #fffaf0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: #1c130a;
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+header {
+  text-align: center;
+  padding: 16px;
+  background: linear-gradient(180deg, #2a1c10, #1c130a);
+  border-bottom: 3px solid var(--gold);
+}
+header h1 { margin: 0; color: var(--gold); letter-spacing: 2px; }
+
+.screen { padding: 20px; max-width: 900px; margin: 0 auto; }
+
+.panel {
+  background: var(--panel-bg);
+  border: 2px solid var(--gold);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 420px;
+  margin: 40px auto;
+}
+.panel.center { text-align: center; }
+
+label { display: block; margin: 12px 0 4px; font-weight: bold; }
+input[type="text"], input[type="number"] {
+  width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px;
+}
+button {
+  margin-top: 16px; padding: 10px 18px; border: none; border-radius: 8px;
+  background: var(--gold); color: #2a1c10; font-weight: bold; cursor: pointer; font-size: 15px;
+}
+button:hover { background: #e6b94a; }
+button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+button.danger { background: #b3402f; color: #fff; }
+button.danger:hover { background: #c94b38; }
+
+.divider { height: 1px; background: #ddd; margin: 20px 0; }
+
+.room-code {
+  font-size: 40px; font-weight: bold; letter-spacing: 8px;
+  color: var(--wood-dark); margin: 16px 0;
+}
+.muted { color: #888; font-size: 13px; }
+
+.status-text { color: #eee; text-align:center; margin-bottom: 12px; }
+
+.palette {
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 16px;
+}
+.piece-chip {
+  width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+  background: var(--panel-bg); border: 2px solid var(--gold); border-radius: 8px;
+  font-weight: bold; cursor: pointer; font-size: 15px;
+}
+.piece-chip.selected { background: var(--gold); }
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+  width: 100%; max-width: 490px; aspect-ratio: 7 / 9;
+  margin: 0 auto;
+  background-image: url("assets/board.jpg");
+  background-size: cover;
+  border: 3px solid var(--gold); border-radius: 6px; overflow: hidden;
+}
+.board .cell {
+  position: relative;
+  border: 1px solid rgba(0,0,0,0.08);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.board .cell.mine-zone { background: rgba(120, 200, 255, 0.12); }
+.board .cell.dim-zone { cursor: default; }
+.board .cell.selected { outline: 3px solid #2fd15f; outline-offset: -3px; }
+
+.piece { position: relative; width: 82%; height: 82%; }
+.piece img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.piece-rank {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-weight: bold; font-size: 14px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+
+.battle-layout {
+  display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; align-items: flex-start;
+}
+.side-info {
+  background: var(--panel-bg); border: 2px solid var(--gold); border-radius: 10px;
+  padding: 16px; min-width: 200px; text-align: center;
+}
+.chip-box { font-size: 18px; font-weight: bold; margin: 8px 0; }
+.turn-indicator { font-size: 16px; font-weight: bold; padding: 8px; border-radius: 6px; margin: 8px 0; }
+.turn-indicator.my-turn { background: #2fd15f; color: #fff; }
+.turn-indicator.opp-turn { background: #999; color: #fff; }
+.timer-box { font-size: 20px; font-weight: bold; color: var(--wood-dark); margin: 8px 0; }
+
+.duel-box {
+  margin-top: 16px; padding: 12px; background: #fff3d6; border: 2px solid #b3402f; border-radius: 8px;
+}
+.duel-box h3 { margin: 0 0 8px; color: #b3402f; }
+.duel-box input { width: 70px; margin-right: 6px; }
+.duel-box button { margin: 6px 4px 0 0; }
+
+#screen-result h2 { color: var(--gold); text-align: center; }
