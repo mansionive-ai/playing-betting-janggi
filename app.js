@@ -8,37 +8,11 @@ const TURN_LIMIT_MS = 3 * 60 * 1000; // 3분
 const FOLD_BONUS_CHECK_RANK = "2"; // 2가 폴드로 승리하면 상대 칩 10개 추가 획득
 const FOLD_BONUS_AMOUNT = 10;
 
-// ===================== 사운드 =====================
-// ⚠️ 아래 두 파일명만 바꾸면 원하는 mp3로 교체할 수 있습니다.
-// 깃허브 저장소 루트(index.html과 같은 위치)에 이 이름 그대로 mp3 파일을 넣어주세요.
-const BGM_FILENAME = "배경음악.mp3";
-const MOVE_SFX_FILENAME = "장기말효과음.mp3";
-
-const bgmAudio = new Audio(BGM_FILENAME);
-bgmAudio.loop = true;
-bgmAudio.volume = 0.35;
-let musicMuted = false;
-
-function startBgmIfNeeded() {
-  if (musicMuted) return;
-  bgmAudio.play().catch(() => { /* 자동재생 정책으로 실패해도 무시 */ });
-}
-
-function playMoveSfx() {
-  if (musicMuted) return;
-  try {
-    const s = new Audio(MOVE_SFX_FILENAME);
-    s.volume = 0.6;
-    s.play().catch(() => {});
-  } catch (e) { /* 파일이 없어도 게임 진행에 지장 없도록 무시 */ }
-}
-
-function toggleMusic() {
-  musicMuted = !musicMuted;
-  if (musicMuted) bgmAudio.pause(); else bgmAudio.play().catch(() => {});
-  const btn = $("btn-toggle-music");
-  if (btn) btn.textContent = musicMuted ? "🔇" : "🔊";
-}
+// ==================== 사운드 파일 설정 ====================
+// 아래 mp3 두 개를 GitHub 저장소의 루트(폴더 없이, index.html과 같은 위치)에
+// 그대로 올리면 자동으로 재생됩니다. 파일명을 다르게 쓰고 싶다면 이 두 값만 바꾸세요.
+const BGM_FILE = "배경음악.mp3";          // 배경음악 파일명
+const MOVE_SFX_FILE = "장기말효과음.mp3"; // 장기말 배치/이동 효과음 파일명
 
 // -------- 로컬 클라이언트 식별자 (새로고침해도 내 자리 유지) --------
 function getClientId() {
@@ -52,12 +26,47 @@ function getClientId() {
 const CLIENT_ID = getClientId();
 
 let roomId = null;
-let myRole = null; // 'first' | 'second'
+let myIdentity = null; // 'host'(방 만든 사람) | 'guest'(입장한 사람) - 방에 접속한 물리적 자리, 판이 바뀌어도 고정
+let myRole = null;     // 'first'(선공) | 'second'(후공) - 이번 판의 역할. roles 매핑에 따라 매 판 바뀔 수 있음
 let room = null;   // 최신 room 스냅샷 (로컬 캐시)
 let selectedCell = null; // 배치 단계에서 선택된 팔레트 말
 let selectedBoardCell = null; // 전투 단계에서 선택된 내 말 좌표
+let lastMatchNumber = null; // 재대결 시 로컬 배치 상태를 초기화하기 위한 추적값
 
 const $ = (id) => document.getElementById(id);
+
+// ===================== 사운드 =====================
+
+function initSounds() {
+  const bgm = $("bgm-audio");
+  const sfx = $("sfx-move");
+  if (bgm) bgm.src = BGM_FILE;
+  if (sfx) sfx.src = MOVE_SFX_FILE;
+}
+
+let musicOn = false;
+function toggleMusic() {
+  const bgm = $("bgm-audio");
+  if (!bgm) return;
+  musicOn = !musicOn;
+  if (musicOn) {
+    bgm.volume = 0.4;
+    bgm.play().catch(() => { musicOn = false; });
+    $("btn-toggle-music").textContent = "🔊";
+  } else {
+    bgm.pause();
+    $("btn-toggle-music").textContent = "🔈";
+  }
+}
+
+function playMoveSound() {
+  const sfx = $("sfx-move");
+  if (!sfx) return;
+  try {
+    sfx.currentTime = 0;
+    sfx.play().catch(() => {});
+  } catch (e) { /* 무시 */ }
+}
 
 function showScreen(name) {
   ["lobby", "waiting", "placement", "battle", "result"].forEach(s => {
@@ -75,9 +84,8 @@ function genRoomCode() {
 }
 
 async function createRoom() {
-  startBgmIfNeeded();
   const chips = parseInt($("input-chips").value, 10) || 30;
-  const name = $("input-name").value.trim() || "선 플레이어";
+  const name = $("input-name").value.trim() || "방장";
   const code = genRoomCode();
   const ref = db.ref("rooms/" + code);
 
@@ -85,9 +93,14 @@ async function createRoom() {
     createdAt: firebase.database.ServerValue.TIMESTAMP,
     chipsStart: chips,
     status: "waiting",
+    // players: 방에 접속한 "자리"(host/guest) - 판이 몇 번을 가든 고정된 물리적 자리입니다.
     players: {
-      first: { name, clientId: CLIENT_ID, connected: true }
+      host: { name, clientId: CLIENT_ID, connected: true }
     },
+    // roles: 이번 판에서 누가 선공(first)/후공(second)인지 - host/guest 둘 중 하나를 가리킵니다.
+    // 첫 판은 상대가 입장할 때 무작위로 정해지고, 이후 판은 "이긴 사람이 후공" 규칙으로 재배정됩니다.
+    roles: null,
+    matchNumber: 1,
     chips: { first: chips, second: chips },
     placement: {},
     placementDone: { first: false, second: false },
@@ -103,41 +116,41 @@ async function createRoom() {
   });
 
   roomId = code;
-  myRole = "first";
+  myIdentity = "host";
   $("room-code-display").textContent = code;
   showScreen("waiting");
   listenRoom();
 }
 
 async function joinRoom() {
-  startBgmIfNeeded();
   const code = $("input-join-code").value.trim().toUpperCase();
-  const name = $("input-name").value.trim() || "후 플레이어";
+  const name = $("input-name").value.trim() || "참가자";
   if (!code) { alert("방 코드를 입력하세요."); return; }
   const ref = db.ref("rooms/" + code);
 
   const result = await ref.transaction((r) => {
     if (r === null) return r; // 방 없음
-    if (r.players && r.players.second) {
-      // 이미 second가 있음 - 재접속인지 확인
-      if (r.players.second.clientId === CLIENT_ID) return r; // 본인 재접속 허용
+    if (r.players && r.players.guest) {
+      // 이미 guest가 있음 - 재접속인지 확인
+      if (r.players.guest.clientId === CLIENT_ID) return r; // 본인 재접속 허용
       return; // abort - 방이 이미 꽉참
     }
-    if (!r.players || !r.players.first) return; // abort
-    r.players.second = { name, clientId: CLIENT_ID, connected: true };
+    if (!r.players || !r.players.host) return; // abort
+    r.players.guest = { name, clientId: CLIENT_ID, connected: true };
+
     if (r.status === "waiting") {
       r.status = "placement";
-      // 첫 판 선/후공은 랜덤으로 결정합니다.
-      if (Math.random() < 0.5) {
-        const tmp = r.players.first;
-        r.players.first = r.players.second;
-        r.players.second = tmp;
-      }
+      // 첫 판의 선공/후공은 무작위로 결정합니다.
+      const hostIsFirst = Math.random() < 0.5;
+      r.roles = hostIsFirst
+        ? { first: "host", second: "guest" }
+        : { first: "guest", second: "host" };
+      const firstName = hostIsFirst ? r.players.host.name : name;
+      const secondName = hostIsFirst ? name : r.players.host.name;
+      r.log = r.log || {};
+      let k = Object.keys(r.log).length;
+      r.log[k] = { t: Date.now(), msg: `${name}님이 입장했습니다. (무작위 결정) 선공: ${firstName} / 후공: ${secondName}` };
     }
-    r.log = r.log || {};
-    const k = Object.keys(r.log).length;
-    const firstName = r.players.first.name, secondName = r.players.second.name;
-    r.log[k] = { t: Date.now(), msg: `${name}님이 입장했습니다. (선: ${firstName} / 후: ${secondName}) 배치를 시작하세요.` };
     return r;
   });
 
@@ -147,30 +160,29 @@ async function joinRoom() {
   }
 
   roomId = code;
-  myRole = "second";
+  myIdentity = "guest";
   listenRoom();
 }
 
 // ===================== 방 상태 구독 =====================
 
-let prevStatus = null; // 라운드 전환(재대결) 감지용
+function computeMyRole() {
+  if (!room) return;
+  // 내 자리(host/guest)가 아직 확정 안됐으면 (재접속 케이스) clientId로 판별
+  if (!myIdentity) {
+    if (room.players?.host?.clientId === CLIENT_ID) myIdentity = "host";
+    else if (room.players?.guest?.clientId === CLIENT_ID) myIdentity = "guest";
+  }
+  if (myIdentity && room.roles) {
+    myRole = room.roles.first === myIdentity ? "first" : "second";
+  }
+}
 
 function listenRoom() {
   db.ref("rooms/" + roomId).on("value", (snap) => {
     room = snap.val();
     if (!room) return;
-    // clientId로 내 역할을 매 스냅샷마다 재확인 (재대결 시 선/후 역할이 바뀔 수 있음)
-    if (room.players?.first?.clientId === CLIENT_ID) myRole = "first";
-    else if (room.players?.second?.clientId === CLIENT_ID) myRole = "second";
-
-    // 새 라운드(재대결 포함)가 막 시작됐으면 로컬 배치 상태 초기화
-    if (room.status === "placement" && prevStatus !== "placement") {
-      localPlacement = {};
-      selectedCell = null;
-    }
-    if (room.status !== "battle") selectedBoardCell = null;
-    prevStatus = room.status;
-
+    computeMyRole();
     render();
   });
 }
@@ -179,6 +191,14 @@ function listenRoom() {
 
 function render() {
   if (!room) return;
+
+  // 재대결로 새 판이 시작되면(matchNumber 증가) 로컬 배치 상태를 초기화합니다.
+  if (room.matchNumber && room.matchNumber !== lastMatchNumber) {
+    lastMatchNumber = room.matchNumber;
+    localPlacement = {};
+    selectedCell = null;
+    selectedBoardCell = null;
+  }
 
   if (room.winner) {
     showScreen("result");
@@ -224,9 +244,6 @@ function renderPlacement() {
   const oppRole = myRole === "first" ? "second" : "first";
   const oppDone = room.placementDone?.[oppRole];
 
-  // 선공(하단 진영) 플레이어는 팔레트를 보드 아래로, 후공(상단 진영)은 기존대로 위에 배치
-  $("placement-flow").classList.toggle("reverse", myRole === "first");
-
   $("placement-status").textContent = myDone
     ? (oppDone ? "상대도 배치를 완료했습니다. 전투를 시작합니다..." : "배치 완료! 상대를 기다리는 중...")
     : "말을 팔레트에서 선택한 뒤, 자신의 진영 칸을 클릭해 배치하세요. (14칸 모두 채워야 확정 가능)";
@@ -266,7 +283,7 @@ function renderPlacement() {
             if (!selectedCell || myDone) return;
             localPlacement[key] = selectedCell;
             selectedCell = null;
-            playMoveSfx();
+            playMoveSound();
             renderPlacement();
           };
         }
@@ -279,6 +296,20 @@ function renderPlacement() {
 
   const allFilled = Object.keys(localPlacement).length === 14;
   $("btn-confirm-placement").disabled = !allFilled || myDone;
+
+  // 선공(아래 진영, first)은 배치할 칸이 보드 아래쪽에 있어서, 팔레트가 보드 위에
+  // 있으면 마우스를 매번 멀리 움직여야 합니다. 그래서 선공일 때만 팔레트를 보드
+  // 아래로 옮겨서 자기 진영과 가깝게 둡니다. 후공(위 진영)은 기존 그대로 팔레트가 위에 있습니다.
+  const panel = document.querySelector("#screen-placement .panel");
+  const paletteEl = $("placement-palette");
+  const boardFrame = board.closest(".board-frame") || board;
+  if (panel && paletteEl && boardFrame) {
+    if (myRole === "first") {
+      panel.insertBefore(boardFrame, paletteEl); // 보드가 먼저, 팔레트가 그 아래
+    } else {
+      panel.insertBefore(paletteEl, boardFrame); // 기존 순서: 팔레트가 먼저, 보드가 아래
+    }
+  }
 }
 
 async function confirmPlacement() {
@@ -401,7 +432,7 @@ function onBattleCellClick(r, c) {
   const { r: fr, c: fc } = selectedBoardCell;
   if (Math.abs(fr - r) > 1 || Math.abs(fc - c) > 1) { return; } // 킹 이동 범위 초과
 
-  playMoveSfx();
+  playMoveSound();
   performMove(fr, fc, r, c);
   selectedBoardCell = null;
 }
@@ -778,32 +809,38 @@ function renderResult() {
   $("result-reason").textContent = "승리 조건: " + (reasons[room.winReason] || room.winReason);
 }
 
-// ===================== 재대결 =====================
-
+// ===================== 재대결(게임 재시작) =====================
+// 로비로 돌아가지 않고 같은 방에서 바로 다음 판을 시작합니다.
+// 규칙: 이번 판 승자가 다음 판의 후공, 패자가 다음 판의 선공이 됩니다.
+// (첫 판의 선공/후공은 입장 시점에 무작위로 이미 정해져 있습니다.)
 async function rematch() {
   await db.ref("rooms/" + roomId).transaction((r) => {
-    if (!r || !r.winner) return r; // 이미 다른 클라이언트가 초기화했으면 중단
-    const winnerRole = r.winner;
-    const loserRole = winnerRole === "first" ? "second" : "first";
-    const winnerPlayer = r.players[winnerRole];
-    const loserPlayer = r.players[loserRole];
+    if (!r || !r.winner || !r.roles) return r;
 
-    // 승자가 후공, 패자가 선공
-    r.players = { first: loserPlayer, second: winnerPlayer };
+    const winnerRole = r.winner; // 'first' | 'second'
+    const winnerIdentity = r.roles[winnerRole]; // 'host' | 'guest'
+    const loserIdentity = winnerIdentity === "host" ? "guest" : "host";
+
+    r.roles = { first: loserIdentity, second: winnerIdentity };
     r.chips = { first: r.chipsStart, second: r.chipsStart };
     r.placement = {};
     r.placementDone = { first: false, second: false };
     r.board = {};
     r.turn = "first";
     r.turnNumber = 0;
-    r.turnStartedAt = Date.now();
+    r.turnStartedAt = null;
     r.duel = null;
     r.goalPending = null;
     r.winner = null;
     r.winReason = null;
     r.status = "placement";
+    r.matchNumber = (r.matchNumber || 1) + 1;
+
     r.log = r.log || {};
-    r.log[Object.keys(r.log).length] = { t: Date.now(), msg: `새 게임을 시작합니다. (이전 승자 ${winnerPlayer.name}님이 이번엔 후공)` };
+    const k = Object.keys(r.log).length;
+    const winnerName = r.players?.[winnerIdentity]?.name || (winnerRole === "first" ? "선공" : "후공");
+    const loserName = r.players?.[loserIdentity]?.name || "상대";
+    r.log[k] = { t: Date.now(), msg: `${r.matchNumber}판 시작! (지난 판 승자 ${winnerName}님이 후공, ${loserName}님이 선공입니다)` };
     return r;
   });
 }
@@ -811,6 +848,7 @@ async function rematch() {
 // ===================== 이벤트 바인딩 =====================
 
 window.addEventListener("DOMContentLoaded", () => {
+  initSounds();
   $("btn-create-room").onclick = createRoom;
   $("btn-join-room").onclick = joinRoom;
   $("btn-confirm-placement").onclick = confirmPlacement;
