@@ -10,7 +10,12 @@
 
 <header>
   <h1>♟ 플레잉배팅장기</h1>
+  <button id="btn-toggle-music" class="music-toggle" title="배경음악 켜기/끄기">🔈</button>
 </header>
+
+<!-- 사운드: 실제 파일명은 app.js 상단의 BGM_FILE / MOVE_SFX_FILE 값만 바꾸면 됩니다. -->
+<audio id="bgm-audio" loop preload="auto"></audio>
+<audio id="sfx-move" preload="auto"></audio>
 
 <!-- 로비 화면 -->
 <section id="screen-lobby" class="screen">
@@ -49,7 +54,9 @@
   <div class="panel center">
     <p id="placement-status" class="status-text"></p>
     <div id="placement-palette" class="palette"></div>
-    <div id="placement-board" class="board"></div>
+    <div class="board-frame">
+      <div id="placement-board" class="board"></div>
+    </div>
     <button id="btn-confirm-placement" disabled>배치 확정</button>
   </div>
 </section>
@@ -70,7 +77,9 @@
         <div id="duel-actions"></div>
       </div>
     </div>
-    <div id="battle-board" class="board battle"></div>
+    <div class="board-frame">
+      <div id="battle-board" class="board battle"></div>
+    </div>
   </div>
 </section>
 
@@ -79,7 +88,8 @@
   <div class="panel center">
     <h2 id="result-title"></h2>
     <p id="result-reason"></p>
-    <button id="btn-back-lobby">로비로 돌아가기</button>
+    <button id="btn-rematch">다시하기 (재대결)</button>
+    <button id="btn-back-lobby" class="secondary-link">방 나가기</button>
   </div>
 </section>
 
