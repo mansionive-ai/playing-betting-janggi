@@ -8,6 +8,38 @@ const TURN_LIMIT_MS = 3 * 60 * 1000; // 3분
 const FOLD_BONUS_CHECK_RANK = "2"; // 2가 폴드로 승리하면 상대 칩 10개 추가 획득
 const FOLD_BONUS_AMOUNT = 10;
 
+// ===================== 사운드 =====================
+// ⚠️ 아래 두 파일명만 바꾸면 원하는 mp3로 교체할 수 있습니다.
+// 깃허브 저장소 루트(index.html과 같은 위치)에 이 이름 그대로 mp3 파일을 넣어주세요.
+const BGM_FILENAME = "배경음악.mp3";
+const MOVE_SFX_FILENAME = "장기말효과음.mp3";
+
+const bgmAudio = new Audio(BGM_FILENAME);
+bgmAudio.loop = true;
+bgmAudio.volume = 0.35;
+let musicMuted = false;
+
+function startBgmIfNeeded() {
+  if (musicMuted) return;
+  bgmAudio.play().catch(() => { /* 자동재생 정책으로 실패해도 무시 */ });
+}
+
+function playMoveSfx() {
+  if (musicMuted) return;
+  try {
+    const s = new Audio(MOVE_SFX_FILENAME);
+    s.volume = 0.6;
+    s.play().catch(() => {});
+  } catch (e) { /* 파일이 없어도 게임 진행에 지장 없도록 무시 */ }
+}
+
+function toggleMusic() {
+  musicMuted = !musicMuted;
+  if (musicMuted) bgmAudio.pause(); else bgmAudio.play().catch(() => {});
+  const btn = $("btn-toggle-music");
+  if (btn) btn.textContent = musicMuted ? "🔇" : "🔊";
+}
+
 // -------- 로컬 클라이언트 식별자 (새로고침해도 내 자리 유지) --------
 function getClientId() {
   let id = localStorage.getItem("jbj_clientId");
@@ -43,6 +75,7 @@ function genRoomCode() {
 }
 
 async function createRoom() {
+  startBgmIfNeeded();
   const chips = parseInt($("input-chips").value, 10) || 30;
   const name = $("input-name").value.trim() || "선 플레이어";
   const code = genRoomCode();
@@ -77,6 +110,7 @@ async function createRoom() {
 }
 
 async function joinRoom() {
+  startBgmIfNeeded();
   const code = $("input-join-code").value.trim().toUpperCase();
   const name = $("input-name").value.trim() || "후 플레이어";
   if (!code) { alert("방 코드를 입력하세요."); return; }
@@ -91,10 +125,19 @@ async function joinRoom() {
     }
     if (!r.players || !r.players.first) return; // abort
     r.players.second = { name, clientId: CLIENT_ID, connected: true };
-    if (r.status === "waiting") r.status = "placement";
+    if (r.status === "waiting") {
+      r.status = "placement";
+      // 첫 판 선/후공은 랜덤으로 결정합니다.
+      if (Math.random() < 0.5) {
+        const tmp = r.players.first;
+        r.players.first = r.players.second;
+        r.players.second = tmp;
+      }
+    }
     r.log = r.log || {};
     const k = Object.keys(r.log).length;
-    r.log[k] = { t: Date.now(), msg: `${name}님이 입장했습니다. 배치를 시작하세요.` };
+    const firstName = r.players.first.name, secondName = r.players.second.name;
+    r.log[k] = { t: Date.now(), msg: `${name}님이 입장했습니다. (선: ${firstName} / 후: ${secondName}) 배치를 시작하세요.` };
     return r;
   });
 
@@ -110,15 +153,24 @@ async function joinRoom() {
 
 // ===================== 방 상태 구독 =====================
 
+let prevStatus = null; // 라운드 전환(재대결) 감지용
+
 function listenRoom() {
   db.ref("rooms/" + roomId).on("value", (snap) => {
     room = snap.val();
     if (!room) return;
-    // 내 역할이 아직 확정 안됐으면 (재접속 케이스) clientId로 판별
-    if (!myRole) {
-      if (room.players?.first?.clientId === CLIENT_ID) myRole = "first";
-      else if (room.players?.second?.clientId === CLIENT_ID) myRole = "second";
+    // clientId로 내 역할을 매 스냅샷마다 재확인 (재대결 시 선/후 역할이 바뀔 수 있음)
+    if (room.players?.first?.clientId === CLIENT_ID) myRole = "first";
+    else if (room.players?.second?.clientId === CLIENT_ID) myRole = "second";
+
+    // 새 라운드(재대결 포함)가 막 시작됐으면 로컬 배치 상태 초기화
+    if (room.status === "placement" && prevStatus !== "placement") {
+      localPlacement = {};
+      selectedCell = null;
     }
+    if (room.status !== "battle") selectedBoardCell = null;
+    prevStatus = room.status;
+
     render();
   });
 }
@@ -172,6 +224,9 @@ function renderPlacement() {
   const oppRole = myRole === "first" ? "second" : "first";
   const oppDone = room.placementDone?.[oppRole];
 
+  // 선공(하단 진영) 플레이어는 팔레트를 보드 아래로, 후공(상단 진영)은 기존대로 위에 배치
+  $("placement-flow").classList.toggle("reverse", myRole === "first");
+
   $("placement-status").textContent = myDone
     ? (oppDone ? "상대도 배치를 완료했습니다. 전투를 시작합니다..." : "배치 완료! 상대를 기다리는 중...")
     : "말을 팔레트에서 선택한 뒤, 자신의 진영 칸을 클릭해 배치하세요. (14칸 모두 채워야 확정 가능)";
@@ -211,6 +266,7 @@ function renderPlacement() {
             if (!selectedCell || myDone) return;
             localPlacement[key] = selectedCell;
             selectedCell = null;
+            playMoveSfx();
             renderPlacement();
           };
         }
@@ -345,6 +401,7 @@ function onBattleCellClick(r, c) {
   const { r: fr, c: fc } = selectedBoardCell;
   if (Math.abs(fr - r) > 1 || Math.abs(fc - c) > 1) { return; } // 킹 이동 범위 초과
 
+  playMoveSfx();
   performMove(fr, fc, r, c);
   selectedBoardCell = null;
 }
@@ -721,6 +778,36 @@ function renderResult() {
   $("result-reason").textContent = "승리 조건: " + (reasons[room.winReason] || room.winReason);
 }
 
+// ===================== 재대결 =====================
+
+async function rematch() {
+  await db.ref("rooms/" + roomId).transaction((r) => {
+    if (!r || !r.winner) return r; // 이미 다른 클라이언트가 초기화했으면 중단
+    const winnerRole = r.winner;
+    const loserRole = winnerRole === "first" ? "second" : "first";
+    const winnerPlayer = r.players[winnerRole];
+    const loserPlayer = r.players[loserRole];
+
+    // 승자가 후공, 패자가 선공
+    r.players = { first: loserPlayer, second: winnerPlayer };
+    r.chips = { first: r.chipsStart, second: r.chipsStart };
+    r.placement = {};
+    r.placementDone = { first: false, second: false };
+    r.board = {};
+    r.turn = "first";
+    r.turnNumber = 0;
+    r.turnStartedAt = Date.now();
+    r.duel = null;
+    r.goalPending = null;
+    r.winner = null;
+    r.winReason = null;
+    r.status = "placement";
+    r.log = r.log || {};
+    r.log[Object.keys(r.log).length] = { t: Date.now(), msg: `새 게임을 시작합니다. (이전 승자 ${winnerPlayer.name}님이 이번엔 후공)` };
+    return r;
+  });
+}
+
 // ===================== 이벤트 바인딩 =====================
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -731,5 +818,7 @@ window.addEventListener("DOMContentLoaded", () => {
     navigator.clipboard.writeText(roomId);
     alert("방 코드가 복사되었습니다: " + roomId);
   };
+  $("btn-rematch").onclick = rematch;
   $("btn-back-lobby").onclick = () => location.reload();
+  $("btn-toggle-music").onclick = toggleMusic;
 });
