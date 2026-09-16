@@ -17,18 +17,26 @@ body {
 }
 
 header {
+  position: relative;
   text-align: center;
   padding: 16px;
   background: linear-gradient(180deg, #2a1c10, #1c130a);
   border-bottom: 3px solid var(--gold);
-  position: relative;
 }
 header h1 { margin: 0; color: var(--gold); letter-spacing: 2px; }
-.music-btn {
-  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
-  margin: 0; background: transparent; border: 2px solid var(--gold); border-radius: 50%;
-  width: 40px; height: 40px; font-size: 18px; padding: 0;
+
+.music-toggle {
+  position: absolute;
+  top: 50%; right: 16px;
+  transform: translateY(-50%);
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 18px;
+  background: #2a1c10;
+  border: 2px solid var(--gold);
+  color: var(--gold);
 }
+.music-toggle:hover { background: #3a2a18; }
 
 .screen { padding: 20px; max-width: 900px; margin: 0 auto; }
 
@@ -54,8 +62,11 @@ button:hover { background: #e6b94a; }
 button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
 button.danger { background: #b3402f; color: #fff; }
 button.danger:hover { background: #c94b38; }
-button.secondary-btn { background: transparent; border: 2px solid var(--gold); color: var(--gold); margin-left: 8px; }
-button.secondary-btn:hover { background: rgba(212,164,55,0.15); }
+button.secondary-link {
+  display: block; margin: 10px auto 0; background: transparent; color: #888;
+  font-weight: normal; text-decoration: underline; padding: 4px 8px;
+}
+button.secondary-link:hover { background: transparent; color: #555; }
 
 .divider { height: 1px; background: #ddd; margin: 20px 0; }
 
@@ -65,13 +76,7 @@ button.secondary-btn:hover { background: rgba(212,164,55,0.15); }
 }
 .muted { color: #888; font-size: 13px; }
 
-.status-text { color: var(--ink); font-weight: 600; text-align:center; margin-bottom: 12px; }
-
-.placement-flow { display: flex; flex-direction: column; }
-.placement-flow .palette { order: 1; }
-.placement-flow .board { order: 2; }
-.placement-flow.reverse .palette { order: 2; margin-top: 16px; margin-bottom: 0; }
-.placement-flow.reverse .board { order: 1; }
+.status-text { color: #111; font-weight: bold; text-align:center; margin-bottom: 12px; }
 
 .palette {
   display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 16px;
@@ -83,20 +88,28 @@ button.secondary-btn:hover { background: rgba(212,164,55,0.15); }
 }
 .piece-chip.selected { background: var(--gold); }
 
-.board {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  grid-template-rows: repeat(9, 1fr);
+/* board.jpg 이미지 자체에 살짝 여백(테두리 장식)이 있어서, 그 여백을 보정하지 않으면
+   말들이 실제 칸 중앙에서 살짝 벗어나 보입니다(특히 가장자리 칸일수록 어긋남이 커짐).
+   그래서 배경 이미지를 담당하는 .board-frame과, 실제 칸 격자를 담당하는 .board를 분리하고
+   .board를 이미지의 여백만큼 안쪽으로 inset 시켜서 격자선과 실제 칸을 맞춥니다. */
+.board-frame {
+  position: relative;
   width: 100%; max-width: 490px; aspect-ratio: 7 / 9;
   margin: 0 auto;
   background-image: url("assets/board.jpg");
-  background-size: cover;
+  background-size: 100% 100%;
   border: 3px solid var(--gold); border-radius: 6px; overflow: hidden;
+}
+.board {
+  position: absolute;
+  left: 1.8%; right: 1.4%; top: 1.4%; bottom: 1.2%;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(9, 1fr);
 }
 .board .cell {
   position: relative;
   border: 1px solid rgba(0,0,0,0.08);
-  display: flex; align-items: center; justify-content: center;
   cursor: pointer;
 }
 .board .cell.mine-zone { background: rgba(120, 200, 255, 0.12); }
@@ -104,10 +117,12 @@ button.secondary-btn:hover { background: rgba(212,164,55,0.15); }
 .board .cell.selected { outline: 3px solid #2fd15f; outline-offset: -3px; }
 
 .piece {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 78%; height: 78%; display: flex; align-items: center; justify-content: center;
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 82%; height: 82%;
+  transform: translate(-50%, -50%);
 }
-.piece img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: block; }
+.piece img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .piece-rank {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   font-weight: bold; font-size: 14px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000;
