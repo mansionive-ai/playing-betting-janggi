@@ -3,11 +3,11 @@
 // Realtime Database를 사용하므로 databaseURL이 반드시 포함되어야 합니다.
 
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.asia-southeast1.firebasedatabase.app", // 리전에 맞게 수정
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBrnXZosXdaNKe18ulcZ3tCm4_viQuyi3E",
+  authDomain: "playing-betting-janggi.firebaseapp.com",
+  databaseURL: "https://playing-betting-janggi-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "playing-betting-janggi",
+  storageBucket: "playing-betting-janggi.firebasestorage.app",
+  messagingSenderId: "7706162431",
+  appId: "1:7706162431:web:17886d565d8d836512c8ca"
 };
