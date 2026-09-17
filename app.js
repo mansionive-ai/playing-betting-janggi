@@ -1,12 +1,30 @@
 // ===================== 플레잉배팅장기 - app.js =====================
-// Firebase Realtime Database를 이용한 1v1 온라인 대전 로직
+// 이제 이 클라이언트는 Firebase Realtime Database에 직접 쓰기를 하지 않습니다.
+// (database.rules.json 에서 rooms/$roomId 자체를 완전히 쓰기 금지 처리했습니다.)
+// 방 만들기/입장/배치/이동/베팅/폴드/콜 등 상태를 바꾸는 모든 동작은 Cloud
+// Functions(functions/index.js)를 호출해서만 이루어지고, 서버만 아직 공개되지
+// 않은 장기말의 실제 값을 알 수 있습니다. 클라이언트는 (1) 공개된 방 상태와
+// (2) 내 자신의 말 값만 담긴 개인 전용 경로, 이 두 가지만 실시간으로 구독합니다.
 
-firebase.initializeApp(firebaseConfig);
+const firebaseApp = firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
 const db = firebase.database();
 
-const TURN_LIMIT_MS = 3 * 60 * 1000; // 3분
-const FOLD_BONUS_CHECK_RANK = "2"; // 2가 폴드로 승리하면 상대 칩 10개 추가 획득
-const FOLD_BONUS_AMOUNT = 10;
+// Cloud Functions를 배포한 리전 (Realtime Database와 가까운 리전으로 맞춰뒀습니다).
+const FUNCTIONS_REGION = "asia-southeast1";
+const fx = firebaseApp.functions(FUNCTIONS_REGION);
+const createRoomFn = fx.httpsCallable("createRoom");
+const joinRoomFn = fx.httpsCallable("joinRoom");
+const submitPlacementFn = fx.httpsCallable("submitPlacement");
+const movePieceFn = fx.httpsCallable("movePiece");
+const duelBetFn = fx.httpsCallable("duelBet");
+const duelRaiseFn = fx.httpsCallable("duelRaise");
+const duelFoldFn = fx.httpsCallable("duelFold");
+const duelCallFn = fx.httpsCallable("duelCall");
+const claimForfeitFn = fx.httpsCallable("claimForfeit");
+const rematchFn = fx.httpsCallable("rematch");
+
+const TURN_LIMIT_MS = 3 * 60 * 1000; // 3분 (서버와 동일한 값 - 타이머 표시용)
 
 // ==================== 사운드 파일 설정 ====================
 // 아래 mp3 두 개를 GitHub 저장소의 루트(폴더 없이, index.html과 같은 위치)에
@@ -14,24 +32,15 @@ const FOLD_BONUS_AMOUNT = 10;
 const BGM_FILE = "배경음악.mp3";          // 배경음악 파일명
 const MOVE_SFX_FILE = "장기말효과음.mp3"; // 장기말 배치/이동 효과음 파일명
 
-// -------- 로컬 클라이언트 식별자 (새로고침해도 내 자리 유지) --------
-function getClientId() {
-  let id = localStorage.getItem("jbj_clientId");
-  if (!id) {
-    id = "c_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    localStorage.setItem("jbj_clientId", id);
-  }
-  return id;
-}
-const CLIENT_ID = getClientId();
-
+let CLIENT_ID = null;   // = 내 Firebase Auth uid (로그인 완료 후 채워짐)
 let roomId = null;
-let myIdentity = null; // 'host'(방 만든 사람) | 'guest'(입장한 사람) - 방에 접속한 물리적 자리, 판이 바뀌어도 고정
-let myRole = null;     // 'first'(선공) | 'second'(후공) - 이번 판의 역할. roles 매핑에 따라 매 판 바뀔 수 있음
-let room = null;   // 최신 room 스냅샷 (로컬 캐시)
-let selectedCell = null; // 배치 단계에서 선택된 팔레트 말
-let selectedBoardCell = null; // 전투 단계에서 선택된 내 말 좌표
-let lastMatchNumber = null; // 재대결 시 로컬 배치 상태를 초기화하기 위한 추적값
+let myRole = null;      // 'first'(선공) | 'second'(후공) - 이번 판의 역할
+let room = null;        // 최신 공개 room 스냅샷 (비밀 말 값은 들어있지 않음)
+let myPrivateBoard = null; // 내 소유 말의 "실제" 위치->값 매핑 (나만 읽을 수 있는 경로)
+let selectedCell = null;
+let selectedBoardCell = null;
+let lastMatchNumber = null;
+let localPlacement = {}; // {"r,c": piece} - 확정 전까지는 완전히 로컬 상태
 
 const $ = (id) => document.getElementById(id);
 
@@ -74,108 +83,72 @@ function showScreen(name) {
   });
 }
 
-// ===================== 방 생성 / 입장 =====================
-
-function genRoomCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let s = "";
-  for (let i = 0; i < 5; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
+function showError(err) {
+  const msg = (err && err.message) ? err.message : String(err);
+  alert(msg);
 }
+
+// ===================== 로그인 (익명) =====================
+// RTDB 보안 규칙과 Cloud Functions가 auth.uid 기반으로 "누가 어떤 말을 볼 수
+// 있는지"를 판단하기 때문에, 방을 만들거나 입장하기 전에 먼저 로그인이 끝나야 합니다.
+
+auth.onAuthStateChanged((user) => {
+  if (user) {
+    CLIENT_ID = user.uid;
+    $("auth-status").style.display = "none";
+    $("btn-create-room").disabled = false;
+    $("btn-join-room").disabled = false;
+  }
+});
+
+auth.signInAnonymously().catch((err) => {
+  $("auth-status").textContent = "서버 연결에 실패했습니다. 새로고침 해주세요. (" + err.message + ")";
+});
+
+// ===================== 방 생성 / 입장 =====================
 
 async function createRoom() {
   const chips = parseInt($("input-chips").value, 10) || 30;
-  const name = $("input-name").value.trim() || "방장";
-  const code = genRoomCode();
-  const ref = db.ref("rooms/" + code);
-
-  await ref.set({
-    createdAt: firebase.database.ServerValue.TIMESTAMP,
-    chipsStart: chips,
-    status: "waiting",
-    // players: 방에 접속한 "자리"(host/guest) - 판이 몇 번을 가든 고정된 물리적 자리입니다.
-    players: {
-      host: { name, clientId: CLIENT_ID, connected: true }
-    },
-    // roles: 이번 판에서 누가 선공(first)/후공(second)인지 - host/guest 둘 중 하나를 가리킵니다.
-    // 첫 판은 상대가 입장할 때 무작위로 정해지고, 이후 판은 "이긴 사람이 후공" 규칙으로 재배정됩니다.
-    roles: null,
-    matchNumber: 1,
-    chips: { first: chips, second: chips },
-    placement: {},
-    placementDone: { first: false, second: false },
-    board: {},
-    turn: "first",
-    turnNumber: 0,
-    turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
-    duel: null,
-    goalPending: null,
-    winner: null,
-    winReason: null,
-    log: { "0": { t: firebase.database.ServerValue.TIMESTAMP, msg: `${name}님이 방을 만들었습니다. (시작 칩 ${chips}개)` } }
-  });
-
-  roomId = code;
-  myIdentity = "host";
-  $("room-code-display").textContent = code;
-  showScreen("waiting");
-  listenRoom();
+  const name = $("input-name").value.trim();
+  $("btn-create-room").disabled = true;
+  try {
+    const res = await createRoomFn({ chips, name });
+    roomId = res.data.roomId;
+    $("room-code-display").textContent = roomId;
+    showScreen("waiting");
+    listenRoom();
+  } catch (err) {
+    showError(err);
+  } finally {
+    $("btn-create-room").disabled = false;
+  }
 }
 
 async function joinRoom() {
   const code = $("input-join-code").value.trim().toUpperCase();
-  const name = $("input-name").value.trim() || "참가자";
+  const name = $("input-name").value.trim();
   if (!code) { alert("방 코드를 입력하세요."); return; }
-  const ref = db.ref("rooms/" + code);
-
-  const result = await ref.transaction((r) => {
-    if (r === null) return r; // 방 없음
-    if (r.players && r.players.guest) {
-      // 이미 guest가 있음 - 재접속인지 확인
-      if (r.players.guest.clientId === CLIENT_ID) return r; // 본인 재접속 허용
-      return; // abort - 방이 이미 꽉참
-    }
-    if (!r.players || !r.players.host) return; // abort
-    r.players.guest = { name, clientId: CLIENT_ID, connected: true };
-
-    if (r.status === "waiting") {
-      r.status = "placement";
-      // 첫 판의 선공/후공은 무작위로 결정합니다.
-      const hostIsFirst = Math.random() < 0.5;
-      r.roles = hostIsFirst
-        ? { first: "host", second: "guest" }
-        : { first: "guest", second: "host" };
-      const firstName = hostIsFirst ? r.players.host.name : name;
-      const secondName = hostIsFirst ? name : r.players.host.name;
-      r.log = r.log || {};
-      let k = Object.keys(r.log).length;
-      r.log[k] = { t: Date.now(), msg: `${name}님이 입장했습니다. (무작위 결정) 선공: ${firstName} / 후공: ${secondName}` };
-    }
-    return r;
-  });
-
-  if (!result.committed || result.snapshot.val() === null) {
-    alert("존재하지 않거나 이미 가득 찬 방입니다.");
-    return;
+  $("btn-join-room").disabled = true;
+  try {
+    await joinRoomFn({ code, name });
+    roomId = code;
+    listenRoom();
+  } catch (err) {
+    showError(err);
+  } finally {
+    $("btn-join-room").disabled = false;
   }
-
-  roomId = code;
-  myIdentity = "guest";
-  listenRoom();
 }
 
 // ===================== 방 상태 구독 =====================
+// 두 개의 실시간 구독을 유지합니다:
+//  1) rooms/$roomId       -> 공개 상태 (비밀 말 값은 절대 들어있지 않음)
+//  2) rooms/$roomId/private/$내uid/board -> 내 말의 "진짜" 위치->값 매핑
 
 function computeMyRole() {
-  if (!room) return;
-  // 내 자리(host/guest)가 아직 확정 안됐으면 (재접속 케이스) clientId로 판별
-  if (!myIdentity) {
-    if (room.players?.host?.clientId === CLIENT_ID) myIdentity = "host";
-    else if (room.players?.guest?.clientId === CLIENT_ID) myIdentity = "guest";
-  }
-  if (myIdentity && room.roles) {
-    myRole = room.roles.first === myIdentity ? "first" : "second";
-  }
+  if (!room || !CLIENT_ID) return;
+  if (room.players?.host?.uid === CLIENT_ID) myRole = room.roles ? (room.roles.first === "host" ? "first" : "second") : null;
+  else if (room.players?.guest?.uid === CLIENT_ID) myRole = room.roles ? (room.roles.first === "guest" ? "first" : "second") : null;
 }
 
 function listenRoom() {
@@ -184,6 +157,10 @@ function listenRoom() {
     if (!room) return;
     computeMyRole();
     render();
+  });
+  db.ref(`rooms/${roomId}/private/${CLIENT_ID}/board`).on("value", (snap) => {
+    myPrivateBoard = snap.val() || {};
+    if (room) render();
   });
 }
 
@@ -226,11 +203,9 @@ function render() {
 }
 
 // ===================== 배치 단계 =====================
+// 확정 버튼을 누르기 전까지는 서버에 아무것도 보내지 않는 완전한 로컬 상태입니다.
 
 const ALL_PIECES = ["A","2","3","4","5","6","7","8","9","10","J","Q","K","star"];
-
-// 로컬 전용 임시 배치 상태 (서버에는 확정 버튼 눌러야 반영)
-let localPlacement = {}; // {"r,c": piece}
 
 function homeCellsFor(role) {
   const rows = role === "first" ? [7, 8] : [0, 1];
@@ -248,7 +223,6 @@ function renderPlacement() {
     ? (oppDone ? "상대도 배치를 완료했습니다. 전투를 시작합니다..." : "배치 완료! 상대를 기다리는 중...")
     : "말을 팔레트에서 선택한 뒤, 자신의 진영 칸을 클릭해 배치하세요. (14칸 모두 채워야 확정 가능)";
 
-  // 팔레트 렌더 (아직 안 쓴 말들)
   const used = new Set(Object.values(localPlacement));
   const palette = $("placement-palette");
   palette.innerHTML = "";
@@ -261,7 +235,6 @@ function renderPlacement() {
     palette.appendChild(btn);
   });
 
-  // 보드 렌더
   const board = $("placement-board");
   board.innerHTML = "";
   board.style.pointerEvents = myDone ? "none" : "";
@@ -276,7 +249,7 @@ function renderPlacement() {
         cell.classList.add("mine-zone");
         const piece = localPlacement[key];
         if (piece) {
-          cell.appendChild(makePieceEl(piece, "mine", true));
+          cell.appendChild(makePieceEl(piece, true));
           cell.onclick = () => { delete localPlacement[key]; renderPlacement(); };
         } else {
           cell.onclick = () => {
@@ -298,68 +271,40 @@ function renderPlacement() {
   $("btn-confirm-placement").disabled = !allFilled || myDone;
 
   // 선공(아래 진영, first)은 배치할 칸이 보드 아래쪽에 있어서, 팔레트가 보드 위에
-  // 있으면 마우스를 매번 멀리 움직여야 합니다. 그래서 선공일 때만 팔레트를 보드
-  // 아래로 옮겨서 자기 진영과 가깝게 둡니다. 후공(위 진영)은 기존 그대로 팔레트가 위에 있습니다.
+  // 있으면 마우스를 매번 멀리 움직여야 합니다. 선공일 때만 팔레트를 보드 아래로
+  // 옮겨서 자기 진영과 가깝게 둡니다. 후공(위 진영)은 기존 그대로 팔레트가 위에 있습니다.
   const panel = document.querySelector("#screen-placement .panel");
   const paletteEl = $("placement-palette");
   const boardFrame = board.closest(".board-frame") || board;
   if (panel && paletteEl && boardFrame) {
     if (myRole === "first") {
-      panel.insertBefore(boardFrame, paletteEl); // 보드가 먼저, 팔레트가 그 아래
+      panel.insertBefore(boardFrame, paletteEl);
     } else {
-      panel.insertBefore(paletteEl, boardFrame); // 기존 순서: 팔레트가 먼저, 보드가 아래
+      panel.insertBefore(paletteEl, boardFrame);
     }
   }
 }
 
 async function confirmPlacement() {
   if (Object.keys(localPlacement).length !== 14) return;
-  const updates = {};
-  updates[`placement/${myRole}`] = localPlacement;
-  updates[`placementDone/${myRole}`] = true;
-  await db.ref("rooms/" + roomId).update(updates);
-
-  // 양쪽 다 완료됐는지 트랜잭션으로 확인 후 board 병합 (한쪽 클라이언트만 실행되도록)
-  await db.ref("rooms/" + roomId).transaction((r) => {
-    if (!r) return r;
-    if (r.status !== "placement") return r;
-    if (!r.placementDone?.first || !r.placementDone?.second) return r;
-    // 병합
-    const board = {};
-    for (const role of ["first", "second"]) {
-      const p = r.placement[role];
-      for (const key in p) {
-        const [rr, cc] = key.split(",").map(Number);
-        board[rr + "_" + cc] = { owner: role, piece: p[key], revealed: false };
-      }
-    }
-    r.board = board;
-    r.status = "battle";
-    r.turn = "first";
-    r.turnNumber = 1;
-    r.turnStartedAt = Date.now(); // 서버 트랜잭션 내부이므로 클라이언트 시각 기준 근사값 사용
-    r.log = r.log || {};
-    const k = Object.keys(r.log).length;
-    r.log[k] = { t: Date.now(), msg: "양측 배치가 완료되었습니다. 선 플레이어부터 시작합니다." };
-    return r;
-  });
+  $("btn-confirm-placement").disabled = true;
+  try {
+    await submitPlacementFn({ roomId, placement: localPlacement });
+  } catch (err) {
+    showError(err);
+    $("btn-confirm-placement").disabled = false;
+  }
 }
 
 // ===================== 전투 단계 =====================
 
 function boardKey(r, c) { return r + "_" + c; }
 
-function makePieceEl(piece, side, alwaysShowRank) {
-  // side: 'mine' | 'black' | 'white' | 'star'
+function makePieceEl(piece, alwaysShowRank) {
   const wrap = document.createElement("div");
   wrap.className = "piece";
   const img = document.createElement("img");
-  if (piece === "star") {
-    img.src = "assets/star.png";
-  } else {
-    const isEven = ["2","4","6","8","10","Q"].includes(piece);
-    img.src = isEven ? "assets/black.png" : "assets/white.png";
-  }
+  img.src = pieceImageSrc(piece);
   wrap.appendChild(img);
   if (alwaysShowRank && piece !== "star") {
     const label = document.createElement("span");
@@ -368,6 +313,51 @@ function makePieceEl(piece, side, alwaysShowRank) {
     wrap.appendChild(label);
   }
   return wrap;
+}
+
+// 실제 말 값("A","2",..,"K","star") 또는 색깔 카테고리("black","white","star")를
+// 받아서 알맞은 이미지 경로를 돌려줍니다.
+function pieceImageSrc(value) {
+  if (value === "star") return "assets/star.png";
+  if (value === "black") return "assets/black.png";
+  if (value === "white") return "assets/white.png";
+  const isEven = ["2","4","6","8","10","Q"].includes(value);
+  return isEven ? "assets/black.png" : "assets/white.png";
+}
+
+// 아직 결투로 숫자가 드러나지 않은 상대 말: 정확한 숫자는 모르지만, 이 게임은
+// 원래부터 흑/백/★ 색깔은 항상 보이는 심리전 규칙이라 색깔 이미지는 그대로
+// 보여주고, 숫자만 가립니다 (랭크 텍스트 없이 이미지만).
+function makeColorOnlyPieceEl(color) {
+  const wrap = document.createElement("div");
+  wrap.className = "piece";
+  const img = document.createElement("img");
+  img.src = pieceImageSrc(color);
+  wrap.appendChild(img);
+  return wrap;
+}
+
+// 색깔 정보조차 아직 없는 극히 드문 과도 상태(로딩 중)를 위한 대체 표시.
+function makeHiddenPieceEl() {
+  const wrap = document.createElement("div");
+  wrap.className = "piece piece-hidden";
+  return wrap;
+}
+
+// 화면에 그릴 말 정보를 계산합니다. 내 말이면 내 개인 경로(myPrivateBoard)에서
+// 진짜 값을 가져오고, 상대의 아직 공개되지 않은 말이면 색깔(흑/백/★)만 알 수
+// 있고 정확한 숫자는 결투로 밝혀지기 전까지 알 수 없습니다.
+function pieceAt(key) {
+  const occ = room.board[key];
+  if (!occ) return null;
+  if (occ.revealed) {
+    return { owner: occ.owner, piece: occ.piece, color: null, revealed: true, mine: occ.owner === myRole };
+  }
+  if (occ.owner === myRole) {
+    const piece = myPrivateBoard ? myPrivateBoard[key] : undefined;
+    return { owner: occ.owner, piece: piece || null, color: null, revealed: false, mine: true };
+  }
+  return { owner: occ.owner, piece: null, color: occ.color || null, revealed: false, mine: false };
 }
 
 function renderBattle() {
@@ -388,11 +378,18 @@ function renderBattle() {
       const cell = document.createElement("div");
       cell.className = "cell";
       const key = boardKey(r, c);
-      const occ = room.board[key];
-      if (occ) {
-        const isMine = occ.owner === myRole;
-        const showRank = isMine || occ.revealed;
-        cell.appendChild(makePieceEl(occ.piece, isMine ? "mine" : "opp", showRank));
+      const info = pieceAt(key);
+      if (info) {
+        if (info.piece) {
+          // 내 말이거나, 결투로 이미 공개된 말 - 정확한 숫자까지 보여줍니다.
+          cell.appendChild(makePieceEl(info.piece, info.mine || info.revealed));
+        } else if (info.color) {
+          // 아직 결투 전인 상대 말 - 흑/백/★ 색깔은 보여주되 숫자는 가립니다.
+          cell.appendChild(makeColorOnlyPieceEl(info.color));
+        } else {
+          // 색깔 정보조차 아직 안 온 극히 짧은 과도 상태
+          cell.appendChild(makeHiddenPieceEl());
+        }
       }
       if (selectedBoardCell && selectedBoardCell.r === r && selectedBoardCell.c === c) {
         cell.classList.add("selected");
@@ -421,16 +418,15 @@ function onBattleCellClick(r, c) {
     return;
   }
 
-  // 이미 선택된 말이 있는 상태
   if (selectedBoardCell.r === r && selectedBoardCell.c === c) {
     selectedBoardCell = null; render(); return;
   }
   if (occ && occ.owner === myRole) {
-    selectedBoardCell = { r, c }; render(); return; // 다른 내 말로 선택 변경
+    selectedBoardCell = { r, c }; render(); return;
   }
 
   const { r: fr, c: fc } = selectedBoardCell;
-  if (Math.abs(fr - r) > 1 || Math.abs(fc - c) > 1) { return; } // 킹 이동 범위 초과
+  if (Math.abs(fr - r) > 1 || Math.abs(fc - c) > 1) { return; }
 
   playMoveSound();
   performMove(fr, fc, r, c);
@@ -438,121 +434,11 @@ function onBattleCellClick(r, c) {
 }
 
 async function performMove(fr, fc, tr, tc) {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || room.status !== "battle" || room.duel) return room;
-    if (room.turn !== myRole) return room;
-    const fromKey = boardKey(fr, fc);
-    const toKey = boardKey(tr, tc);
-    const moving = room.board[fromKey];
-    if (!moving || moving.owner !== myRole) return room;
-    const target = room.board[toKey];
-
-    room.log = room.log || {};
-    const logIdx = () => Object.keys(room.log).length;
-
-    if (!target) {
-      // 빈 칸 이동
-      delete room.board[fromKey];
-      room.board[toKey] = moving;
-      applyGoalArrival(room, myRole, tr, tc, moving.piece);
-      switchTurn(room);
-      return room;
-    }
-
-    if (target.owner === myRole) return room; // 아군 칸 - 불가
-
-    // 상대 말과 조우
-    if (moving.piece === "star" || target.piece === "star") {
-      // 자폭: 결투 없이 둘 다 제거
-      delete room.board[fromKey];
-      delete room.board[toKey];
-      room.log[logIdx()] = { t: Date.now(), msg: "★ 조커가 상대 말과 함께 자폭했습니다!" };
-      clearGoalIfPieceGone(room, tr, tc);
-      switchTurn(room);
-      return room;
-    }
-
-    // 결투 시작
-    const attacker = myRole;
-    const defender = target.owner;
-    if (room.chips[attacker] < 1 || room.chips[defender] < 1) {
-      // 기본 배팅 칩이 없으면 이동 불가 처리 (극단적 예외 상황 방지)
-      return room;
-    }
-    room.chips[attacker] -= 1;
-    room.chips[defender] -= 1;
-    room.duel = {
-      pos: { r: tr, c: tc },
-      from: { r: fr, c: fc },
-      attacker, defender,
-      attackerPiece: moving.piece,
-      defenderPiece: target.piece,
-      contrib: { [attacker]: 1, [defender]: 1 },
-      turnToAct: attacker,
-      stage: "opening", // opening -> responding 반복
-      lastActionDeadline: Date.now()
-    };
-    room.log[logIdx()] = { t: Date.now(), msg: `결투 발생! (${attacker === "first" ? "선" : "후"} vs ${defender === "first" ? "선" : "후"})` };
-    return room;
-  });
-}
-
-function switchTurn(room) {
-  room.turnNumber = (room.turnNumber || 0) + 1;
-  const finishedSide = room.turn;
-  const nextSide = finishedSide === "first" ? "second" : "first";
-
-  // 골 생존 체크: finishedSide가 방금 한 턴을 마쳤으므로, 상대(nextSide가 아니라
-  // 그 반대편, 즉 "골에 들어가 있던 쪽")가 한 턴을 버텼는지 확인
-  checkGoalSurvival(room, finishedSide);
-
-  room.turn = nextSide;
-  room.turnStartedAt = Date.now();
-
-  checkEliminationWin(room);
-}
-
-function applyGoalArrival(room, owner, r, c, piece) {
-  const targetRow = owner === "first" ? 0 : 8;
-  if (r === targetRow) {
-    room.goalPending = { owner, r, c, turnSet: room.turnNumber };
-  } else if (room.goalPending && room.goalPending.owner === owner) {
-    // 같은 편의 다른 말이 움직였다고 goalPending을 건드릴 필요는 없음(다른 칸이므로 유지)
+  try {
+    await movePieceFn({ roomId, from: { r: fr, c: fc }, to: { r: tr, c: tc } });
+  } catch (err) {
+    showError(err);
   }
-}
-
-function clearGoalIfPieceGone(room, r, c) {
-  if (room.goalPending && room.goalPending.r === r && room.goalPending.c === c) {
-    room.goalPending = null;
-  }
-}
-
-function checkGoalSurvival(room, finishedSide) {
-  const gp = room.goalPending;
-  if (!gp) return;
-  if (gp.owner === finishedSide) return; // 자기 턴에 스스로 체크할 필요 없음 (상대 턴이 지나야 함)
-  // finishedSide(상대편)의 턴이 막 끝남 = gp.owner 쪽이 한 턴을 버틴 것
-  if (gp.turnSet >= room.turnNumber) return; // 도착한 바로 그 턴이면 아직 안버틴 것
-  const cell = room.board[boardKey(gp.r, gp.c)];
-  if (cell && cell.owner === gp.owner) {
-    room.winner = gp.owner;
-    room.winReason = "goal";
-    room.log = room.log || {};
-    room.log[Object.keys(room.log).length] = { t: Date.now(), msg: `${gp.owner === "first" ? "선" : "후"} 플레이어의 말이 상대 진영 끝에서 1턴을 버텨 승리했습니다!` };
-  } else {
-    room.goalPending = null;
-  }
-}
-
-function checkEliminationWin(room) {
-  if (room.winner) return;
-  const counts = { first: 0, second: 0 };
-  for (const k in room.board) counts[room.board[k].owner]++;
-  if (counts.first === 0) { room.winner = "second"; room.winReason = "elimination"; }
-  else if (counts.second === 0) { room.winner = "first"; room.winReason = "elimination"; }
-
-  if (room.chips.first <= 0) { room.winner = "second"; room.winReason = "chips"; }
-  else if (room.chips.second <= 0) { room.winner = "first"; room.winReason = "chips"; }
 }
 
 // ===================== 결투(배팅) 단계 =====================
@@ -585,7 +471,6 @@ function renderDuel() {
   const myRemaining = room.chips[myRole];
 
   if (d.stage === "opening" && myRole === d.attacker) {
-    // 공격자 최초 배팅: 1 ~ 상대 남은칩
     const max = Math.max(1, oppRemaining);
     const input = document.createElement("input");
     input.type = "number"; input.min = 1; input.max = max; input.value = 1;
@@ -595,14 +480,15 @@ function renderDuel() {
     btn.onclick = () => duelOpeningBet(clampInt(input.value, 1, max));
     actions.appendChild(input); actions.appendChild(btn);
   } else {
-    // 상대의 배팅에 대응: 콜 / 레이즈 / 폴드
     const callBtn = document.createElement("button");
     const diff = (d.contrib[oppRole] || 0) - (d.contrib[myRole] || 0);
     callBtn.textContent = `콜 (${diff}칩 추가)`;
     callBtn.onclick = () => duelCall();
     actions.appendChild(callBtn);
 
-    const raiseMax = Math.max(1, myRemaining - Math.max(0, diff));
+    // 서버 쪽 duelRaise와 동일한 캡: 내가 낼 수 있는 만큼이면서, 상대가 콜(올인
+    // 포함)로 받아줄 수 있는 만큼(=상대의 남은 칩)을 넘을 수 없습니다.
+    const raiseMax = Math.max(1, Math.min(myRemaining - Math.max(0, diff), oppRemaining));
     if (raiseMax >= 1 && oppRemaining > 0) {
       const input = document.createElement("input");
       input.type = "number"; input.min = 1; input.max = raiseMax; input.value = 1;
@@ -628,148 +514,29 @@ function clampInt(v, min, max) {
 }
 
 async function duelOpeningBet(amount) {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || !room.duel) return room;
-    const d = room.duel;
-    if (d.turnToAct !== myRole || d.stage !== "opening" || myRole !== d.attacker) return room;
-    const oppRole = myRole === "first" ? "second" : "first";
-    const max = Math.max(1, room.chips[oppRole]);
-    amount = Math.max(1, Math.min(amount, max));
-    if (room.chips[myRole] < amount) amount = room.chips[myRole];
-    room.chips[myRole] -= amount;
-    d.contrib[myRole] = (d.contrib[myRole] || 0) + amount;
-    d.stage = "responding";
-    d.turnToAct = oppRole;
-    d.lastActionDeadline = Date.now();
-    return room;
-  });
+  try { await duelBetFn({ roomId, amount }); } catch (err) { showError(err); }
 }
-
 async function duelCall() {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || !room.duel) return room;
-    const d = room.duel;
-    if (d.turnToAct !== myRole) return room;
-    const oppRole = myRole === "first" ? "second" : "first";
-    const diff = (d.contrib[oppRole] || 0) - (d.contrib[myRole] || 0);
-    const pay = Math.min(Math.max(diff, 0), room.chips[myRole]);
-    room.chips[myRole] -= pay;
-    d.contrib[myRole] = (d.contrib[myRole] || 0) + pay;
-    resolveShowdown(room);
-    return room;
-  });
+  try { await duelCallFn({ roomId }); } catch (err) { showError(err); }
 }
-
 async function duelRaise(amount) {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || !room.duel) return room;
-    const d = room.duel;
-    if (d.turnToAct !== myRole) return room;
-    const oppRole = myRole === "first" ? "second" : "first";
-    const diff = Math.max(0, (d.contrib[oppRole] || 0) - (d.contrib[myRole] || 0));
-    const maxExtra = Math.max(1, room.chips[myRole] - diff);
-    amount = Math.max(1, Math.min(amount, maxExtra));
-    const totalPay = Math.min(diff + amount, room.chips[myRole]);
-    room.chips[myRole] -= totalPay;
-    d.contrib[myRole] = (d.contrib[myRole] || 0) + totalPay;
-    d.stage = "responding";
-    d.turnToAct = oppRole;
-    d.lastActionDeadline = Date.now();
-    return room;
-  });
+  try { await duelRaiseFn({ roomId, amount }); } catch (err) { showError(err); }
 }
-
 async function duelFold() {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || !room.duel) return room;
-    const d = room.duel;
-    if (d.turnToAct !== myRole) return room;
-    const winnerSide = myRole === d.attacker ? d.defender : d.attacker;
-    const loserSide = myRole;
-    finishDuel(room, winnerSide, loserSide, "fold");
-    return room;
-  });
-}
-
-function resolveShowdown(room) {
-  const d = room.duel;
-  const outcome = resolveDuel(d.attackerPiece, d.defenderPiece); // 'a' | 'b' | 'draw'
-  room.log = room.log || {};
-  const logIdx = () => Object.keys(room.log).length;
-
-  const posKey = boardKey(d.pos.r, d.pos.c);
-  const fromKey = boardKey(d.from.r, d.from.c);
-  const pot = (d.contrib[d.attacker] || 0) + (d.contrib[d.defender] || 0);
-
-  if (outcome === "draw") {
-    delete room.board[fromKey];
-    delete room.board[posKey];
-    room.chips[d.attacker] += d.contrib[d.attacker] || 0;
-    room.chips[d.defender] += d.contrib[d.defender] || 0;
-    room.log[logIdx()] = { t: Date.now(), msg: `결투 무승부! (${d.attackerPiece} vs ${d.defenderPiece}) 두 말 모두 제거, 칩은 반환됩니다.` };
-    clearGoalIfPieceGone(room, d.pos.r, d.pos.c);
-  } else {
-    const winnerSide = outcome === "a" ? d.attacker : d.defender;
-    const winnerPiece = outcome === "a" ? d.attackerPiece : d.defenderPiece;
-    finalizeDuelWin(room, d, winnerSide, winnerPiece, pot, `${d.attackerPiece} vs ${d.defenderPiece} 결투 결과`);
-  }
-
-  room.duel = null;
-  switchTurn(room);
-}
-
-function finishDuel(room, winnerSide, loserSide, reason) {
-  const d = room.duel;
-  room.log = room.log || {};
-  const logIdx = () => Object.keys(room.log).length;
-  const pot = (d.contrib[d.attacker] || 0) + (d.contrib[d.defender] || 0);
-  const winnerPiece = winnerSide === d.attacker ? d.attackerPiece : d.defenderPiece;
-
-  finalizeDuelWin(room, d, winnerSide, winnerPiece, pot, "상대가 폴드했습니다");
-
-  // 특수룰: 2가 폴드로 승리 시 상대 칩 10개 추가 획득
-  if (winnerPiece === FOLD_BONUS_CHECK_RANK) {
-    const bonus = Math.min(FOLD_BONUS_AMOUNT, room.chips[loserSide]);
-    room.chips[loserSide] -= bonus;
-    room.chips[winnerSide] += bonus;
-    room.log[logIdx()] = { t: Date.now(), msg: `2의 폴드 승리 보너스! 상대 칩 ${bonus}개를 추가로 획득했습니다.` };
-  }
-
-  room.duel = null;
-  switchTurn(room);
-}
-
-function finalizeDuelWin(room, d, winnerSide, winnerPiece, pot, msgPrefix) {
-  const posKey = boardKey(d.pos.r, d.pos.c);
-  const fromKey = boardKey(d.from.r, d.from.c);
-  room.log = room.log || {};
-  const logIdx = () => Object.keys(room.log).length;
-
-  room.chips[winnerSide] += pot;
-
-  if (winnerSide === d.attacker) {
-    // 공격자가 승리: 공격자 말이 목표 칸으로 이동, 수비자 말 제거
-    delete room.board[fromKey];
-    room.board[posKey] = { owner: d.attacker, piece: d.attackerPiece, revealed: true };
-    applyGoalArrival(room, d.attacker, d.pos.r, d.pos.c, d.attackerPiece);
-  } else {
-    // 수비자가 승리: 공격자 말 제거, 수비자 말은 원위치 유지(공개됨)
-    delete room.board[fromKey];
-    room.board[posKey] = { owner: d.defender, piece: d.defenderPiece, revealed: true };
-  }
-  room.log[logIdx()] = { t: Date.now(), msg: `${msgPrefix} - ${winnerPiece} 승리! 칩 ${pot}개 획득.` };
-  checkEliminationWin(room);
+  try { await duelFoldFn({ roomId }); } catch (err) { showError(err); }
 }
 
 // ===================== 타이머 (3분 제한) =====================
 
+let lastForfeitAttempt = 0;
 let timerInterval = setInterval(() => {
   if (!room || room.status !== "battle" || room.winner) return;
   const deadlineBase = room.duel ? room.duel.lastActionDeadline : room.turnStartedAt;
   if (!deadlineBase) return;
   const elapsed = Date.now() - deadlineBase;
-  if (elapsed > TURN_LIMIT_MS) {
-    tryForfeit();
+  if (elapsed > TURN_LIMIT_MS && Date.now() - lastForfeitAttempt > 3000) {
+    lastForfeitAttempt = Date.now();
+    claimForfeitFn({ roomId }).catch(() => {});
   }
   updateTimerDisplay();
 }, 1000);
@@ -785,21 +552,6 @@ function updateTimerDisplay() {
   if (el) el.textContent = `${m}:${String(s).padStart(2, "0")}`;
 }
 
-async function tryForfeit() {
-  await db.ref("rooms/" + roomId).transaction((room) => {
-    if (!room || room.winner || room.status !== "battle") return room;
-    const deadlineBase = room.duel ? room.duel.lastActionDeadline : room.turnStartedAt;
-    if (!deadlineBase || Date.now() - deadlineBase <= TURN_LIMIT_MS) return room;
-    const timedOutSide = room.duel ? room.duel.turnToAct : room.turn;
-    const winnerSide = timedOutSide === "first" ? "second" : "first";
-    room.winner = winnerSide;
-    room.winReason = "timeout";
-    room.log = room.log || {};
-    room.log[Object.keys(room.log).length] = { t: Date.now(), msg: `${timedOutSide === "first" ? "선" : "후"} 플레이어가 제한시간(3분)을 초과하여 기권패 처리되었습니다.` };
-    return room;
-  });
-}
-
 // ===================== 결과 화면 =====================
 
 function renderResult() {
@@ -810,39 +562,16 @@ function renderResult() {
 }
 
 // ===================== 재대결(게임 재시작) =====================
-// 로비로 돌아가지 않고 같은 방에서 바로 다음 판을 시작합니다.
-// 규칙: 이번 판 승자가 다음 판의 후공, 패자가 다음 판의 선공이 됩니다.
-// (첫 판의 선공/후공은 입장 시점에 무작위로 이미 정해져 있습니다.)
+
 async function rematch() {
-  await db.ref("rooms/" + roomId).transaction((r) => {
-    if (!r || !r.winner || !r.roles) return r;
-
-    const winnerRole = r.winner; // 'first' | 'second'
-    const winnerIdentity = r.roles[winnerRole]; // 'host' | 'guest'
-    const loserIdentity = winnerIdentity === "host" ? "guest" : "host";
-
-    r.roles = { first: loserIdentity, second: winnerIdentity };
-    r.chips = { first: r.chipsStart, second: r.chipsStart };
-    r.placement = {};
-    r.placementDone = { first: false, second: false };
-    r.board = {};
-    r.turn = "first";
-    r.turnNumber = 0;
-    r.turnStartedAt = null;
-    r.duel = null;
-    r.goalPending = null;
-    r.winner = null;
-    r.winReason = null;
-    r.status = "placement";
-    r.matchNumber = (r.matchNumber || 1) + 1;
-
-    r.log = r.log || {};
-    const k = Object.keys(r.log).length;
-    const winnerName = r.players?.[winnerIdentity]?.name || (winnerRole === "first" ? "선공" : "후공");
-    const loserName = r.players?.[loserIdentity]?.name || "상대";
-    r.log[k] = { t: Date.now(), msg: `${r.matchNumber}판 시작! (지난 판 승자 ${winnerName}님이 후공, ${loserName}님이 선공입니다)` };
-    return r;
-  });
+  $("btn-rematch").disabled = true;
+  try {
+    await rematchFn({ roomId });
+  } catch (err) {
+    showError(err);
+  } finally {
+    $("btn-rematch").disabled = false;
+  }
 }
 
 // ===================== 이벤트 바인딩 =====================

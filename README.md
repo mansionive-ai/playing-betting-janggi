@@ -1,74 +1,147 @@
 # 플레잉배팅장기 (온라인 1v1)
 
-GitHub Pages + Firebase Realtime Database로 동작하는 1대1 온라인 장기/배팅 게임입니다.
-서버 코드 없이 정적 파일만으로 동작하며, 실시간 동기화는 Firebase RTDB가 담당합니다.
+GitHub Pages(정적 파일) + Firebase Realtime Database + **Cloud Functions**로 동작하는
+1대1 온라인 장기/배팅 게임입니다. 아직 공개되지 않은 장기말의 실제 값(랭크)은
+**서버(Cloud Functions)만 알 수 있고, 상대 브라우저에는 절대 전달되지 않습니다.**
+그래서 F12 개발자도구로 콘솔을 열어봐도 상대의 안 밝혀진 말을 알아낼 수 없습니다.
 
 ## 파일 구성
 
 ```
-index.html          메인 페이지 (로비/배치/전투/결과 화면)
-style.css            스타일
-firebase-config.js   ⚠️ 본인 Firebase 프로젝트 키로 교체 필요
-rules.js             랭크 비교, 이동 규칙 등 순수 로직
-app.js               Firebase 연동 + 전체 게임 흐름
+index.html             메인 페이지 (로비/배치/전투/결과 화면)
+style.css               스타일
+firebase-config.js      ⚠️ 본인 Firebase 프로젝트 키로 교체 필요
+rules.js                랭크 비교 등 순수 로직 (클라이언트/서버 공용)
+app.js                  Firebase 연동 + 전체 게임 흐름 (Cloud Functions 호출)
+firebase.json            Firebase CLI 배포 설정
+database.rules.json      Realtime Database 보안 규칙
+functions/
+  package.json           Cloud Functions 의존성
+  index.js               🔒 서버 전용 게임 로직 (여기서만 말 값을 다룸)
+  rules.js               rules.js와 동일한 파일의 사본 (Functions에서 재사용)
+배경음악.mp3             (직접 추가) 배경음악 파일 - 저장소 루트에 이 파일명 그대로 추가하세요
+장기말효과음.mp3          (직접 추가) 장기말 배치/이동 효과음 파일 - 저장소 루트에 이 파일명 그대로 추가하세요
 assets/
-  board.jpg          게임판 배경 이미지
-  black.png          흑색(짝수) 말 이미지
-  white.png          백색(홀수) 말 이미지
-  star.png           ★ 조커 말 이미지
+  board.jpg              게임판 배경 이미지
+  black.png              흑색(짝수) 말 이미지
+  white.png              백색(홀수) 말 이미지
+  star.png               ★ 조커 말 이미지
 ```
 
-## 1. Firebase 프로젝트 설정 (5분)
+## 사운드 파일 추가하기
+
+배경음악과 장기말 효과음은 기본적으로 포함되어 있지 않습니다. `app.js` 맨 위쪽의
+아래 두 줄에 적힌 파일명 그대로 mp3 파일을 만들어서, 폴더 없이 저장소 최상위
+(index.html과 같은 위치)에 올리기만 하면 자동으로 재생됩니다.
+
+```js
+const BGM_FILE = "배경음악.mp3";          // 배경음악 파일명
+const MOVE_SFX_FILE = "장기말효과음.mp3"; // 장기말 배치/이동 효과음 파일명
+```
+
+다른 파일명을 쓰고 싶다면 이 두 값만 원하는 이름으로 바꾸면 됩니다. 배경음악은
+브라우저 자동재생 정책 때문에 페이지 진입 시 자동으로 소리가 나지 않고, 헤더의
+🔈 버튼을 눌러야 재생을 시작합니다.
+
+## 왜 Cloud Functions가 필요한가
+
+이전 버전은 정적 파일 + Firebase RTDB만으로 동작했는데, 그 구조에서는 "아직
+공개 안 된 말" 값도 어차피 클라이언트로 전부 내려와 있었고, 단지 화면에 랭크를
+안 보여줬을 뿐이었습니다. 그래서 F12 콘솔에서 `room.board`를 찍어보면 상대 말이
+전부 보였습니다. 이 버전은 그 문제를 근본적으로 고쳤습니다.
+
+- 클라이언트는 이제 Realtime Database에 **직접 쓰기를 전혀 할 수 없습니다**
+  (`database.rules.json`에서 `rooms/$roomId` 자체를 `.write: false` 처리).
+- 방 만들기/입장/배치/이동/베팅/폴드/콜/재대결 등 상태를 바꾸는 모든 동작은
+  `functions/index.js`에 있는 Cloud Functions를 호출해야만 이루어집니다.
+- 아직 공개되지 않은 말의 실제 값은 `rooms/$roomId/private/$uid/board` 라는,
+  **본인만 읽을 수 있는 경로**에만 저장됩니다. 결투가 일어나면 클라이언트가 아니라
+  Cloud Function이 서버 안에서 양쪽 말을 직접 비교해서 승패만 계산하고, 그 결과
+  (이긴 말의 값과 칩 변화)만 공개 데이터에 씁니다.
+- 즉, 아직 결투로 밝혀지지 않은 말은 게임이 끝날 때까지 개발자도구로 아무리
+  뒤져봐도 정확한 숫자를 절대 알 수 없습니다. (단, 흑/백/★ 색깔은 원래 게임
+  규칙상 항상 공개되는 심리전 정보라 그대로 보입니다 - 공개 데이터에 `color`
+  필드로 저장되고, 숫자에 해당하는 `piece` 필드만 결투 전까지 비어있습니다.)
+
+이 구조로 바꾸려면 Firebase의 **Blaze(종량제) 플랜**이 필요합니다(Cloud Functions
+자체가 Blaze 전용 기능). 카드 등록은 필요하지만, 친구끼리 하는 캐주얼한 사용량
+(월 200만 건까지 무료)에서는 실제로 과금될 일이 거의 없습니다.
+
+## 1. Firebase 프로젝트 설정
 
 1. https://console.firebase.google.com 에서 새 프로젝트 생성 (Google Analytics는 꺼도 됨)
 2. 왼쪽 메뉴 **Build > Realtime Database** > "데이터베이스 만들기"
    - 위치는 가까운 리전(예: 싱가포르 asia-southeast1) 선택
-   - 보안 규칙은 우선 "테스트 모드"로 시작 (아래 3번에서 규칙 교체)
-3. 왼쪽 상단 톱니바퀴 > **프로젝트 설정 > 일반** 하단에서 "웹 앱 추가" (</> 아이콘)
-4. 나오는 `firebaseConfig` 객체를 그대로 복사해서 이 프로젝트의 `firebase-config.js` 안의
+   - 보안 규칙은 우선 아무거나로 시작해도 됩니다 (아래에서 `database.rules.json`으로 덮어씁니다)
+3. 왼쪽 메뉴 **Build > Authentication** > "시작하기" > **Sign-in method** 탭에서
+   **익명(Anonymous)** 로그인을 활성화하세요. (게임 자체에 회원가입/로그인 화면은
+   없고, 접속하면 자동으로 익명 계정이 생성됩니다. 이건 "누가 어떤 말의 주인인지"를
+   서버가 구분하기 위한 용도입니다.)
+4. 왼쪽 하단 **업그레이드(Blaze로 변경)**를 눌러 Blaze 플랜으로 전환합니다.
+   (Cloud Functions는 Blaze 플랜에서만 사용할 수 있습니다. 사용량이 적으면 과금은
+   거의 없습니다 - 위 설명 참고)
+5. 왼쪽 상단 톱니바퀴 > **프로젝트 설정 > 일반** 하단에서 "웹 앱 추가" (</> 아이콘)
+6. 나오는 `firebaseConfig` 객체를 그대로 복사해서 이 프로젝트의 `firebase-config.js` 안의
    `firebaseConfig` 값을 전부 덮어쓰세요. **databaseURL이 꼭 포함되어야 합니다.**
 
-## 2. Realtime Database 보안 규칙
+## 2. Cloud Functions + 보안 규칙 배포 (Firebase CLI 필요)
 
-인증(로그인) 없이 동작하는 캐주얼한 구조라 완벽한 부정행위 방지는 어렵지만,
-최소한 구조가 깨지는 것을 막는 기본 규칙입니다. Firebase 콘솔 > Realtime Database >
-규칙 탭에 아래 내용을 붙여넣고 게시하세요.
+Cloud Functions와 Realtime Database 보안 규칙은 콘솔에서 붙여넣는 게 아니라,
+컴퓨터에 Firebase CLI를 설치해서 배포해야 합니다.
 
-```json
-{
-  "rules": {
-    "rooms": {
-      "$roomId": {
-        ".read": true,
-        ".write": true,
-        ".validate": "newData.hasChildren(['status','players','chips','board'])"
-      }
-    }
-  }
-}
-```
+1. Node.js가 없다면 설치 (https://nodejs.org, LTS 버전 권장)
+2. Firebase CLI 설치 및 로그인
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   ```
+3. 이 프로젝트 폴더(=이 README가 있는 폴더, `firebase.json`이 있는 위치)에서
+   ```bash
+   firebase use --add
+   ```
+   목록에서 방금 만든 Firebase 프로젝트를 선택하세요.
+4. Cloud Functions 의존성 설치
+   ```bash
+   cd functions
+   npm install
+   cd ..
+   ```
+5. 배포
+   ```bash
+   firebase deploy --only functions,database
+   ```
+   처음 배포는 몇 분 정도 걸릴 수 있습니다. 완료되면 콘솔에 함수 목록
+   (`createRoom`, `joinRoom`, `submitPlacement`, `movePiece`, `duelBet`, `duelRaise`,
+   `duelFold`, `duelCall`, `claimForfeit`, `rematch`)이 출력됩니다.
+6. Firebase 콘솔 > Realtime Database > 규칙 탭에서 `database.rules.json` 내용이
+   그대로 반영됐는지 확인하세요.
 
-> 더 엄격하게 하려면 Firebase Authentication(익명 로그인)을 추가하고 규칙에서
-> `auth != null` 조건을 걸 수 있지만, 이 프로젝트는 단순 사용을 위해 생략했습니다.
+> 코드를 수정한 뒤 다시 배포할 때도 `firebase deploy --only functions,database`
+> 명령 하나면 됩니다.
 
-## 3. GitHub Pages 배포
+## 3. GitHub Pages 배포 (정적 파일 부분)
+
+Cloud Functions/보안 규칙과는 별개로, 게임 화면 자체(index.html 등)는 그대로
+GitHub Pages에 올립니다.
 
 1. 이 폴더 전체를 새 GitHub 저장소에 푸시합니다.
    ```bash
    git init
    git add .
-   git commit -m "플레잉배팅장기 초기 배포"
+   git commit -m "플레잉배팅장기 배포"
    git branch -M main
    git remote add origin https://github.com/<your-id>/<repo-name>.git
    git push -u origin main
    ```
 2. 저장소 **Settings > Pages** 에서 Source를 `main` 브랜치 `/ (root)`로 설정
 3. 몇 분 후 `https://<your-id>.github.io/<repo-name>/` 로 접속하면 게임이 열립니다.
+   (페이지에 들어가면 자동으로 익명 로그인이 이루어지고, "방 만들기"/"입장하기"
+   버튼이 잠깐 비활성화되어 있다가 로그인이 끝나면 눌러집니다.)
 
 ## 게임 방법
 
-1. **방 만들기**: 닉네임과 시작 칩 개수를 입력하고 "방 만들기" → 방 코드가 생성됩니다 (선 플레이어).
-2. 상대에게 방 코드를 전달 → 상대는 "방 입장하기"에 코드 입력 (후 플레이어).
+1. **방 만들기**: 닉네임과 시작 칩 개수를 입력하고 "방 만들기" → 방 코드가 생성됩니다.
+2. 상대에게 방 코드를 전달 → 상대는 "방 입장하기"에 코드 입력. **선공/후공은 첫 판에 한해 이 시점에 무작위로 결정됩니다.**
 3. **배치 단계**: 각자 자신의 진영 2줄(14칸)에 14개 말을 전부 배치 후 "배치 확정".
    양쪽 모두 확정하면 자동으로 전투가 시작됩니다.
 4. **전투 단계**: 선 플레이어부터 번갈아 한 칸씩(상하좌우/대각선) 이동합니다.
@@ -78,14 +151,19 @@ assets/
    레이즈는 계속 이어질 수 있으며(포커식), 콜이 나오면 양쪽 말을 공개해 승패를 가립니다.
 6. **승리 조건**: 상대 칩 전부 획득 / 상대 진영 맨 끝 줄에서 1턴 생존 / 상대 말 전멸.
 7. 한 턴(또는 결투 결정)에 **3분** 제한이 있으며, 초과 시 자동 기권패 처리됩니다.
+8. 게임이 끝나면 결과 화면에서 **"다시하기"**를 눌러 로비로 나가지 않고 같은 방에서 바로
+   다음 판을 시작할 수 있습니다. 이번 판 승자는 다음 판에 자동으로 후공이 되고, 패자가
+   선공이 됩니다. (방을 완전히 나가고 싶다면 "방 나가기"를 누르세요.)
 
 ## 구현하면서 정리한 세부 규칙 (원문에 명시 안 된 부분에 대한 해석)
 
 원문 규칙에는 없지만 실제로 코드를 짜려면 정해야 했던 부분들입니다. 플레이해보고
 원하시는 방식과 다르면 `app.js` 안의 해당 로직만 고치면 됩니다.
 
-- **선/후 결정**: 원문의 "가넷이 많은 사람" 로직 대신, 방을 만든 사람이 항상 **선(先)**,
-  입장한 사람이 **후(後)** 입니다.
+- **선/후 결정**: 원문의 "가넷이 많은 사람" 로직 대신, 첫 판은 방에 두 명이 모두 모인
+  시점에 **무작위**로 선/후를 정합니다. 이후 재대결("다시하기")부터는 **이긴 사람이
+  다음 판의 후공**, 진 사람이 선공이 됩니다. 방을 만든 사람/입장한 사람이라는 구분은
+  순전히 접속 순서일 뿐, 선/후 배정과는 무관합니다.
 - **레이즈 상한**: 배팅/레이즈 금액은 항상 "상대가 현재 가진 칩 개수"를 넘지 못하도록
   캡을 걸었습니다 (사실상 상대를 올인시킬 수 있는 최대치까지만 베팅 가능 — 노리밋 홀덤과
   유사한 방식이며, 사이드팟이 필요 없는 1:1 구조라 자연스럽게 맞아떨어집니다).
@@ -104,6 +182,8 @@ assets/
 
 ## 향후 개선 아이디어 (선택)
 
-- Firebase Authentication(익명 로그인) 추가로 방 탈취/스푸핑 방지
-- 관전 모드, 재대결 버튼, 대국 기록(로그) 화면 노출
+- 관전 모드, 대국 기록(로그) 화면 노출
 - 모바일 터치 최적화, 말 드래그 앤 드롭
+- 이동/결투 액션에 대한 낙관적(optimistic) UI 업데이트로 체감 반응 속도 개선
+- Firebase Authentication을 익명이 아닌 이메일/소셜 로그인으로 바꿔서 여러 기기에서
+  같은 계정으로 이어서 플레이할 수 있게 하기

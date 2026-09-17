@@ -1,0 +1,13 @@
+{
+  "name": "playing-betting-janggi-functions",
+  "description": "장기말 값(피스 값)을 서버에서만 관리해서 결투 결과를 계산하는 Cloud Functions",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^5.0.0"
+  },
+  "private": true
+}

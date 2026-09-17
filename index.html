@@ -20,6 +20,7 @@
 <!-- 로비 화면 -->
 <section id="screen-lobby" class="screen">
   <div class="panel">
+    <p id="auth-status" class="status-text">서버에 연결하는 중...</p>
     <label>내 이름</label>
     <input type="text" id="input-name" placeholder="닉네임 입력">
 
@@ -28,14 +29,14 @@
     <h3>방 만들기 (선 플레이어)</h3>
     <label>시작 칩 개수</label>
     <input type="number" id="input-chips" value="30" min="5" max="200">
-    <button id="btn-create-room">방 만들기</button>
+    <button id="btn-create-room" disabled>방 만들기</button>
 
     <div class="divider"></div>
 
     <h3>방 입장하기 (후 플레이어)</h3>
     <label>방 코드</label>
     <input type="text" id="input-join-code" placeholder="예: AB12C" maxlength="5" style="text-transform:uppercase">
-    <button id="btn-join-room">입장하기</button>
+    <button id="btn-join-room" disabled>입장하기</button>
   </div>
 </section>
 
@@ -95,7 +96,9 @@
 
 <!-- Firebase SDK (compat 버전 - 별도 빌드 도구 없이 GitHub Pages에서 바로 사용 가능) -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-functions-compat.js"></script>
 
 <script src="firebase-config.js"></script>
 <script src="rules.js"></script>
