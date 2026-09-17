@@ -2,32 +2,16 @@
   "rules": {
     "rooms": {
       "$roomId": {
-        ".write": false,
-
-        "private": {
-          "$uid": {
-            ".read": "auth != null && auth.uid === $uid",
-            ".write": false
-          }
-        },
-
-        "createdAt": { ".read": "auth != null" },
-        "chipsStart": { ".read": "auth != null" },
-        "status": { ".read": "auth != null" },
-        "players": { ".read": "auth != null" },
-        "roles": { ".read": "auth != null" },
-        "matchNumber": { ".read": "auth != null" },
-        "chips": { ".read": "auth != null" },
-        "placementDone": { ".read": "auth != null" },
-        "board": { ".read": "auth != null" },
-        "turn": { ".read": "auth != null" },
-        "turnNumber": { ".read": "auth != null" },
-        "turnStartedAt": { ".read": "auth != null" },
-        "duel": { ".read": "auth != null" },
-        "goalPending": { ".read": "auth != null" },
-        "winner": { ".read": "auth != null" },
-        "winReason": { ".read": "auth != null" },
-        "log": { ".read": "auth != null" }
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "privateBoards": {
+      "$roomId": {
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": false
+        }
       }
     }
   }

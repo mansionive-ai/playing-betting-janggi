@@ -143,7 +143,7 @@ async function joinRoom() {
 // ===================== 방 상태 구독 =====================
 // 두 개의 실시간 구독을 유지합니다:
 //  1) rooms/$roomId       -> 공개 상태 (비밀 말 값은 절대 들어있지 않음)
-//  2) rooms/$roomId/private/$내uid/board -> 내 말의 "진짜" 위치->값 매핑
+//  2) privateBoards/$roomId/$내uid/board -> 내 말의 "진짜" 위치->값 매핑
 
 function computeMyRole() {
   if (!room || !CLIENT_ID) return;
@@ -158,7 +158,7 @@ function listenRoom() {
     computeMyRole();
     render();
   });
-  db.ref(`rooms/${roomId}/private/${CLIENT_ID}/board`).on("value", (snap) => {
+  db.ref(`privateBoards/${roomId}/${CLIENT_ID}/board`).on("value", (snap) => {
     myPrivateBoard = snap.val() || {};
     if (room) render();
   });

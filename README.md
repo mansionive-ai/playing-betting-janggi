@@ -54,7 +54,7 @@ const MOVE_SFX_FILE = "장기말효과음.mp3"; // 장기말 배치/이동 효�
   (`database.rules.json`에서 `rooms/$roomId` 자체를 `.write: false` 처리).
 - 방 만들기/입장/배치/이동/베팅/폴드/콜/재대결 등 상태를 바꾸는 모든 동작은
   `functions/index.js`에 있는 Cloud Functions를 호출해야만 이루어집니다.
-- 아직 공개되지 않은 말의 실제 값은 `rooms/$roomId/private/$uid/board` 라는,
+- 아직 공개되지 않은 말의 실제 값은 `privateBoards/$roomId/$uid/board` 라는,
   **본인만 읽을 수 있는 경로**에만 저장됩니다. 결투가 일어나면 클라이언트가 아니라
   Cloud Function이 서버 안에서 양쪽 말을 직접 비교해서 승패만 계산하고, 그 결과
   (이긴 말의 값과 칩 변화)만 공개 데이터에 씁니다.
