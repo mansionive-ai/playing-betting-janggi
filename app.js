@@ -337,11 +337,41 @@ function makeColorOnlyPieceEl(color) {
   return wrap;
 }
 
-// 색깔 정보조차 아직 없는 극히 드문 과도 상태(로딩 중)를 위한 대체 표시.
+// 아직 색깔 정보조차 없는 극히 드문 과도 상태(로딩 중)를 위한 대체 표시.
 function makeHiddenPieceEl() {
   const wrap = document.createElement("div");
   wrap.className = "piece piece-hidden";
   return wrap;
+}
+
+// 결투가 벌어지는 칸: 공격자 말(왼쪽 반)과 수비자 말(오른쪽 반)을 한 칸 안에
+// 겹쳐서 보여줍니다. 각 절반은 pieceAt()이 돌려주는 정보를 그대로 따라
+// (내 말/공개된 말이면 숫자까지, 아니면 색깔만) 표시합니다.
+function makeDuelPairEl(attackerInfo, defenderInfo) {
+  const wrap = document.createElement("div");
+  wrap.className = "duel-pair";
+  wrap.appendChild(makeDuelHalf(attackerInfo, "left"));
+  wrap.appendChild(makeDuelHalf(defenderInfo, "right"));
+  return wrap;
+}
+
+function makeDuelHalf(info, side) {
+  const half = document.createElement("div");
+  half.className = "duel-half duel-half-" + side;
+  if (info && info.piece) {
+    half.style.backgroundImage = `url(${pieceImageSrc(info.piece)})`;
+    if (info.mine || info.revealed) {
+      const label = document.createElement("span");
+      label.className = "piece-rank";
+      label.textContent = info.piece === "star" ? "★" : info.piece;
+      half.appendChild(label);
+    }
+  } else if (info && info.color) {
+    half.style.backgroundImage = `url(${pieceImageSrc(info.color)})`;
+  } else {
+    half.classList.add("piece-hidden");
+  }
+  return half;
 }
 
 // 화면에 그릴 말 정보를 계산합니다. 내 말이면 내 개인 경로(myPrivateBoard)에서
@@ -373,24 +403,39 @@ function renderBattle() {
     : (activeSide === myRole ? "내 차례입니다" : "상대 차례입니다");
   $("turn-indicator").className = activeSide === myRole ? "my-turn" : "opp-turn";
 
+  const duel = room.duel;
+
   for (let r = 0; r < 9; r++) {
     for (let c = 0; c < 7; c++) {
       const cell = document.createElement("div");
       cell.className = "cell";
       const key = boardKey(r, c);
-      const info = pieceAt(key);
-      if (info) {
-        if (info.piece) {
-          // 내 말이거나, 결투로 이미 공개된 말 - 정확한 숫자까지 보여줍니다.
-          cell.appendChild(makePieceEl(info.piece, info.mine || info.revealed));
-        } else if (info.color) {
-          // 아직 결투 전인 상대 말 - 흑/백/★ 색깔은 보여주되 숫자는 가립니다.
-          cell.appendChild(makeColorOnlyPieceEl(info.color));
-        } else {
-          // 색깔 정보조차 아직 안 온 극히 짧은 과도 상태
-          cell.appendChild(makeHiddenPieceEl());
+
+      if (duel && duel.pos.r === r && duel.pos.c === c) {
+        // 결투가 벌어지고 있는 칸: 공격자가 이 칸으로 "들어온" 상태를 보여주기 위해
+        // 원래 칸(from)의 공격자 말과, 이 칸의 수비자 말을 반씩 겹쳐서 표시합니다.
+        const attackerInfo = pieceAt(boardKey(duel.from.r, duel.from.c));
+        const defenderInfo = pieceAt(key);
+        cell.appendChild(makeDuelPairEl(attackerInfo, defenderInfo));
+      } else if (duel && duel.from.r === r && duel.from.c === c) {
+        // 공격자 말은 결투가 끝날 때까지 위 칸에 겹쳐서 표시되므로, 원래 있던
+        // 칸은 비워둡니다 (어느 말이 들어갔는지 헷갈리지 않도록).
+      } else {
+        const info = pieceAt(key);
+        if (info) {
+          if (info.piece) {
+            // 내 말이거나, 결투로 이미 공개된 말 - 정확한 숫자까지 보여줍니다.
+            cell.appendChild(makePieceEl(info.piece, info.mine || info.revealed));
+          } else if (info.color) {
+            // 아직 결투 전인 상대 말 - 흑/백/★ 색깔은 보여주되 숫자는 가립니다.
+            cell.appendChild(makeColorOnlyPieceEl(info.color));
+          } else {
+            // 색깔 정보조차 아직 안 온 극히 짧은 과도 상태
+            cell.appendChild(makeHiddenPieceEl());
+          }
         }
       }
+
       if (selectedBoardCell && selectedBoardCell.r === r && selectedBoardCell.c === c) {
         cell.classList.add("selected");
       }

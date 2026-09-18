@@ -129,6 +129,35 @@ button.secondary-link:hover { background: transparent; color: #555; }
   border: 2px solid rgba(212, 164, 55, 0.5);
   box-shadow: inset 0 0 6px rgba(0,0,0,0.5);
 }
+
+/* 결투 중인 칸: 공격자/수비자 말을 반씩 겹쳐서 보여주는 표시 */
+.duel-pair {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 88%; height: 88%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 0 0 2px #b3402f, 0 0 8px rgba(179,64,47,0.7);
+}
+.duel-pair .duel-half {
+  flex: 1 1 50%;
+  position: relative;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: rgba(255,255,255,0.06);
+}
+.duel-pair .duel-half-left { border-right: 1px solid rgba(179,64,47,0.8); }
+.duel-pair .duel-half.piece-hidden {
+  background-image: none !important;
+  background: radial-gradient(circle at 35% 30%, #6b5a44, #2a2018 75%);
+}
+.duel-pair .duel-half .piece-rank {
+  position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%);
+  font-weight: bold; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000;
+}
 .piece-rank {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   font-weight: bold; font-size: 14px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000;
