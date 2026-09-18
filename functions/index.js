@@ -132,11 +132,13 @@ function finishDuelServerFold(r, d, winnerSide, loserSide, winnerPiece) {
 
   r.chips[winnerSide] += pot;
   delete r.board[fromKey];
-  r.board[posKey] = { owner: winnerSide, revealed: true, piece: winnerPiece };
+  // 폴드는 "포기"일 뿐, 카드를 뒤집어 확인하는 절차(콜/쇼다운)가 없으므로
+  // 승자의 말도 숫자를 공개하지 않습니다. 흑/백/★ 색깔만 유지한 채 그대로 가립니다.
+  r.board[posKey] = { owner: winnerSide, revealed: false, color: pieceColor(winnerPiece) };
   if (winnerSide === d.attacker) {
     applyGoalArrival(r, d.attacker, d.pos.r, d.pos.c);
   }
-  addLog(r, `상대가 폴드했습니다 - ${winnerPiece} 승리! 칩 ${pot}개 획득.`);
+  addLog(r, `상대가 폴드했습니다! 칩 ${pot}개 획득 (말은 공개되지 않습니다).`);
   checkEliminationWin(r);
 
   if (winnerPiece === FOLD_BONUS_CHECK_RANK) {
