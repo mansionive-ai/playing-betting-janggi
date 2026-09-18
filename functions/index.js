@@ -97,6 +97,7 @@ function checkGoalSurvival(r, finishedSide) {
   if (cell && cell.owner === gp.owner) {
     r.winner = gp.owner;
     r.winReason = "goal";
+    r.status = "finished";
     addLog(r, `${gp.owner === "first" ? "선" : "후"} 플레이어의 말이 상대 진영 끝에서 1턴을 버텨 승리했습니다!`);
   } else {
     r.goalPending = null;
@@ -112,6 +113,11 @@ function checkEliminationWin(r) {
 
   if (r.chips.first <= 0) { r.winner = "second"; r.winReason = "chips"; }
   else if (r.chips.second <= 0) { r.winner = "first"; r.winReason = "chips"; }
+
+  // 승자가 결정된 순간 방을 "종료" 상태로 잠급니다. status가 계속 "battle"로
+  // 남아있으면, 게임이 끝난 뒤에도 movePiece 등을 계속 호출해 말을 움직일 수
+  // 있는 구멍이 생기기 때문입니다(콘솔에서 직접 함수 호출 시).
+  if (r.winner) r.status = "finished";
 }
 
 function switchTurn(r) {
@@ -397,10 +403,10 @@ exports.movePiece = functions.region(REGION).https.onCall(async (data, context) 
       switchTurn(r);
       return r;
     });
-    await Promise.all([
-      db.ref(`privateBoards/${roomId}/${uid}/board/${fromKey}`).remove(),
-      db.ref(`privateBoards/${roomId}/${defenderUid}/board/${toKey}`).remove()
-    ]);
+    await db.ref().update({
+      [`privateBoards/${roomId}/${uid}/board/${fromKey}`]: null,
+      [`privateBoards/${roomId}/${defenderUid}/board/${toKey}`]: null
+    });
     return { ok: true, result: "selfdestruct" };
   }
 
@@ -530,9 +536,11 @@ exports.duelFold = functions.region(REGION).https.onCall(async (data, context) =
   });
 
   if (winnerSide === d.attacker) {
-    await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`).remove();
-    await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${toKey}`).set(winnerPiece);
-    await db.ref(`privateBoards/${roomId}/${defenderUid}/board/${toKey}`).remove();
+    await db.ref().update({
+      [`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`]: null,
+      [`privateBoards/${roomId}/${attackerUid}/board/${toKey}`]: winnerPiece,
+      [`privateBoards/${roomId}/${defenderUid}/board/${toKey}`]: null
+    });
   } else {
     await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`).remove();
   }
@@ -609,14 +617,16 @@ exports.duelCall = functions.region(REGION).https.onCall(async (data, context) =
   });
 
   if (outcome === "draw") {
-    await Promise.all([
-      db.ref(`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`).remove(),
-      db.ref(`privateBoards/${roomId}/${defenderUid}/board/${toKey}`).remove()
-    ]);
+    await db.ref().update({
+      [`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`]: null,
+      [`privateBoards/${roomId}/${defenderUid}/board/${toKey}`]: null
+    });
   } else if (outcome === "a") {
-    await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`).remove();
-    await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${toKey}`).set(attackerPiece);
-    await db.ref(`privateBoards/${roomId}/${defenderUid}/board/${toKey}`).remove();
+    await db.ref().update({
+      [`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`]: null,
+      [`privateBoards/${roomId}/${attackerUid}/board/${toKey}`]: attackerPiece,
+      [`privateBoards/${roomId}/${defenderUid}/board/${toKey}`]: null
+    });
   } else {
     await db.ref(`privateBoards/${roomId}/${attackerUid}/board/${fromKey}`).remove();
   }
@@ -640,6 +650,7 @@ exports.claimForfeit = functions.region(REGION).https.onCall(async (data, contex
     const winnerSide = timedOutSide === "first" ? "second" : "first";
     r.winner = winnerSide;
     r.winReason = "timeout";
+    r.status = "finished";
     addLog(r, `${timedOutSide === "first" ? "선" : "후"} 플레이어가 제한시간(3분)을 초과하여 기권패 처리되었습니다.`);
     return r;
   });
