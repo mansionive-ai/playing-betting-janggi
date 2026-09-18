@@ -136,15 +136,27 @@ function finishDuelServerFold(r, d, winnerSide, loserSide, winnerPiece) {
   const fromKey = boardKey(d.from.r, d.from.c);
   const pot = (d.contrib[d.attacker] || 0) + (d.contrib[d.defender] || 0);
 
+  // 승자의 말이 "이번 결투 이전에 이미" 공개된 상태였는지 확인합니다.
+  // (예: 예전에 다른 결투에서 콜로 밝혀진 말이 이번엔 폴드로 또 이긴 경우)
+  const winnerPosKeyBefore = winnerSide === d.attacker ? fromKey : posKey;
+  const alreadyRevealed = !!(r.board[winnerPosKeyBefore] && r.board[winnerPosKeyBefore].revealed);
+
   r.chips[winnerSide] += pot;
   delete r.board[fromKey];
-  // 폴드는 "포기"일 뿐, 카드를 뒤집어 확인하는 절차(콜/쇼다운)가 없으므로
-  // 승자의 말도 숫자를 공개하지 않습니다. 흑/백/★ 색깔만 유지한 채 그대로 가립니다.
-  r.board[posKey] = { owner: winnerSide, revealed: false, color: pieceColor(winnerPiece) };
+  if (alreadyRevealed) {
+    // 이미 공개됐던 말은 폴드로 이겼다고 다시 숨겨지지 않습니다. 계속 공개 유지.
+    r.board[posKey] = { owner: winnerSide, revealed: true, piece: winnerPiece };
+  } else {
+    // 폴드는 "포기"일 뿐, 카드를 뒤집어 확인하는 절차(콜/쇼다운)가 없으므로
+    // 처음 공개되는 말이라면 숫자를 공개하지 않습니다. 흑/백/★ 색깔만 유지한 채 가립니다.
+    r.board[posKey] = { owner: winnerSide, revealed: false, color: pieceColor(winnerPiece) };
+  }
   if (winnerSide === d.attacker) {
     applyGoalArrival(r, d.attacker, d.pos.r, d.pos.c);
   }
-  addLog(r, `상대가 폴드했습니다! 칩 ${pot}개 획득 (말은 공개되지 않습니다).`);
+  addLog(r, alreadyRevealed
+    ? `상대가 폴드했습니다 - ${winnerPiece} 승리! 칩 ${pot}개 획득.`
+    : `상대가 폴드했습니다! 칩 ${pot}개 획득 (말은 공개되지 않습니다).`);
   checkEliminationWin(r);
 
   if (winnerPiece === FOLD_BONUS_CHECK_RANK) {
